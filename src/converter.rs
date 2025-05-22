@@ -10,18 +10,24 @@ static DETAILED_CHARS: &[char] = &[
 
 pub struct AsciiConverterConfig {
     pub width: Option<u32>,        
+    pub height: Option<u32>,       
     pub char_aspect: f32,         
     pub invert: bool,            
-    pub detailed: bool,         
+    pub detailed: bool,
+    pub preserve_aspect_ratio: bool, 
+    pub scale_factor: Option<f32>,   
 }
 
 impl Default for AsciiConverterConfig {
     fn default() -> Self {
         Self {
-            width: None,           // Default: use terminal width or image width
-            char_aspect: 0.5,      // Default aspect ratio for terminal chars
-            invert: false,         // Default: don't invert brightness
-            detailed: true,        // Default: use detailed character set
+            width: None,
+            height: None,
+            char_aspect: 0.5,
+            invert: false,
+            detailed: true,
+            preserve_aspect_ratio: true, 
+            scale_factor: None,
         }
     }
 }
@@ -33,8 +39,12 @@ where
     let chars = if config.detailed { DETAILED_CHARS } else { SIMPLE_CHARS };
     
     let (img_width, img_height) = image.dimensions();
-    let target_width = config.width.unwrap_or(img_width);
-    let target_height = ((target_width as f32) * ((img_height as f32) / (img_width as f32)) / config.char_aspect) as u32;
+    
+     let (target_width, target_height) = calculate_target_dimensions(
+        img_width, 
+        img_height, 
+        config
+    );
     
     let mut result = Vec::with_capacity(target_height as usize);
     
@@ -76,8 +86,12 @@ where
     let chars = if config.detailed { DETAILED_CHARS } else { SIMPLE_CHARS };
     
     let (img_width, img_height) = image.dimensions();
-    let target_width = config.width.unwrap_or(img_width);
-    let target_height = ((target_width as f32) * ((img_height as f32) / (img_width as f32)) / config.char_aspect) as u32;
+    
+     let (target_width, target_height) = calculate_target_dimensions(
+        img_width, 
+        img_height, 
+        config
+    );
     
     let mut result = Vec::with_capacity(target_height as usize);
     
@@ -112,4 +126,49 @@ where
     }
     
     result
+}
+
+fn calculate_target_dimensions(
+    img_width: u32, 
+    img_height: u32, 
+    config: &AsciiConverterConfig
+) -> (u32, u32) {
+    if let Some(scale) = config.scale_factor {
+        let scaled_width = (img_width as f32 * scale) as u32;
+        let scaled_height = (img_height as f32 * scale / config.char_aspect) as u32;
+        return (scaled_width, scaled_height);
+    }
+    
+    if let (Some(width), Some(height)) = (config.width, config.height) {
+        return (width, height);
+    }
+    
+    if let Some(width) = config.width {
+        if config.preserve_aspect_ratio {
+            let height = (width as f32 * img_height as f32 / img_width as f32 / config.char_aspect) as u32;
+            return (width, height);
+        } else {
+            let height = (img_height as f32 / config.char_aspect) as u32;
+            return (width, height);
+        }
+    }
+    
+    if let Some(height) = config.height {
+        if config.preserve_aspect_ratio {
+            let width = (height as f32 * img_width as f32 / img_height as f32 * config.char_aspect) as u32;
+            return (width, height);
+        } else {
+            let width = img_width;
+            return (width, height);
+        }
+    }
+    
+    let target_width = img_width;
+    let target_height = if config.preserve_aspect_ratio {
+        (img_height as f32 / config.char_aspect) as u32
+    } else {
+        img_height
+    };
+    
+    (target_width, target_height)
 }

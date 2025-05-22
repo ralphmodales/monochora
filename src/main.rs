@@ -19,6 +19,9 @@ struct Args {
 
     #[clap(short, long)]
     width: Option<u32>,
+    
+    #[clap(short = 'H', long)]
+    height: Option<u32>,
 
     #[clap(short = 'c', long, default_value_t = false)]
     colored: bool,
@@ -43,6 +46,15 @@ struct Args {
     
     #[clap(long, default_value_t = false)]
     black_on_white: bool,
+    
+    #[clap(long, default_value_t = false)]
+    fit_terminal: bool,
+    
+    #[clap(long)]
+    scale: Option<f32>,
+    
+    #[clap(long, default_value_t = true)]
+    preserve_aspect: bool,
 }
 
 #[tokio::main]
@@ -64,17 +76,20 @@ async fn main() -> Result<()> {
         }
     );
 
-    let terminal_width = if args.save {
-        None 
-    } else {
+    let terminal_width = if args.fit_terminal && !args.save {
         get_terminal_size().ok().map(|(w, _)| w)
+    } else {
+        None
     };
 
     let config = AsciiConverterConfig {
         width: args.width.or(terminal_width),
+        height: args.height,
         char_aspect: 0.5, 
         invert: args.invert,
         detailed: !args.simple,
+        preserve_aspect_ratio: args.preserve_aspect,
+        scale_factor: args.scale,
     };
 
     println!("Converting frames to ASCII...");
