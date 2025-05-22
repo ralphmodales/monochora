@@ -13,6 +13,9 @@ clap = { version = "4.3.0", features = ["derive"] }
 crossterm = "0.26.1"
 anyhow = "1.0.71"
 tokio = { version = "1.28.2", features = ["full"] }
+reqwest = { version = "0.11", features = ["stream"] }
+url = "2.4"
+tempfile = "3.8"
 
 [lib]
 name = "monochora"

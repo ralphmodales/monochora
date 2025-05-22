@@ -5,6 +5,7 @@ Monochora is a GIF to ASCII art converter written in Rust. It can transform GIF 
 ## Features
 
 - Convert animated GIFs to ASCII art animations
+- **Support for both local files and URLs** - Download GIFs directly from the web
 - Play the animations directly in your terminal
 - Save animations as text files or GIF files
 - Support for colored ASCII art (with ANSI color codes)
@@ -36,14 +37,20 @@ Monochora is a GIF to ASCII art converter written in Rust. It can transform GIF 
 ## Usage
 
 ```bash
-# Basic usage (plays in terminal with original GIF dimensions)
+# Basic usage with local file (plays in terminal with original GIF dimensions)
 monochora -i input.gif
+
+# Basic usage with URL - downloads and converts automatically
+monochora -i https://example.com/animation.gif
 
 # Save as ASCII text file
 monochora -i input.gif -s
 
 # Generate colored ASCII in terminal
 monochora -i input.gif -c
+
+# Download from URL and generate colored ASCII
+monochora -i "https://giffiles.alphacoders.com/220/220890.gif" -c -w 200 -H 100
 
 # Invert brightness
 monochora -i input.gif -v
@@ -81,13 +88,16 @@ monochora -i input.gif -g --font-size 20
 # Save output to a specific file
 monochora -i input.gif -o output.txt
 monochora -i input.gif -g -o output.gif
+
+# Download from URL and save as ASCII GIF with custom styling
+monochora -i "https://example.com/cool.gif" -g --black-on-white --font-size 16
 ```
 
 ## Options
 
 ```
 Options:
-  -i, --input <INPUT>                    Input GIF file path
+  -i, --input <INPUT>                    Input GIF file path or URL (supports HTTP/HTTPS)
   -o, --output <OUTPUT>                  Output file path
   -w, --width <WIDTH>                    Target width in characters
   -H, --height <HEIGHT>                  Target height in characters
@@ -117,6 +127,21 @@ monochora -i animation.gif
 ```
 
 Press `q` or `Esc` to exit the animation.
+
+### URL Input Examples
+
+Download and play a GIF from the internet:
+
+```bash
+# Simple terminal playback
+monochora -i "https://media.giphy.com/media/3o7abKhOpu0NwenH3O/giphy.gif"
+
+# Colored ASCII with custom dimensions
+monochora -i "https://example.com/animation.gif" -c -w 150 -H 75
+
+# Download and save as ASCII GIF
+monochora -i "https://example.com/source.gif" -g -o "converted_ascii.gif"
+```
 
 ### Colored Terminal Animation
 
@@ -174,6 +199,29 @@ Create a large, detailed ASCII GIF:
 monochora -i small_animation.gif -g --scale 2.0 --font-size 8
 ```
 
+## URL Support
+
+Monochora supports downloading GIFs directly from URLs:
+
+- **Supported protocols**: HTTP and HTTPS
+- **Automatic download**: Files are downloaded to temporary storage and cleaned up automatically
+- **Content validation**: Warns if the URL doesn't serve image content
+- **Timeout handling**: 30-second timeout for downloads
+- **Progress indication**: Shows download progress and file size
+
+### URL Examples
+
+```bash
+# Download and convert a GIF from Giphy
+monochora -i "https://media.giphy.com/media/example/giphy.gif" -c
+
+# Download from any image hosting service
+monochora -i "https://i.imgur.com/example.gif" -w 100
+
+# Works with direct links to GIF files
+monochora -i "https://example.com/path/to/animation.gif" -g
+```
+
 ## Dimension Control
 
 Monochora offers flexible dimension control:
@@ -195,11 +243,16 @@ use monochora::{
     converter::{image_to_ascii, AsciiConverterConfig},
     handler::decode_gif,
     display::display_ascii_animation,
+    web::get_input_path,
 };
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Handle both local files and URLs
+    let input_path = get_input_path("https://example.com/animation.gif").await?;
+    
     // Decode the GIF
-    let gif_data = decode_gif("input.gif")?;
+    let gif_data = decode_gif(&input_path)?;
     
     // Configure the converter
     let config = AsciiConverterConfig {
@@ -223,10 +276,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     
     // Display the animation
-    tokio::runtime::Runtime::new()?.block_on(async {
-        display_ascii_animation(&ascii_frames, &frame_delays, gif_data.loop_count, true).await?;
-        Ok::<(), anyhow::Error>(())
-    })?;
+    display_ascii_animation(&ascii_frames, &frame_delays, gif_data.loop_count, true).await?;
     
     Ok(())
 }
@@ -236,10 +286,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 Monochora works by:
 
-1. Decoding GIF frames using the `gif` crate
-2. Converting each frame to ASCII art based on pixel brightness
-3. Preserving original dimensions and aspect ratios by default
-4. Either displaying in terminal, saving to text file, or rendering to a new GIF
+1. **Input handling**: Accepts both local file paths and URLs (HTTP/HTTPS)
+2. **URL processing**: Downloads GIFs from URLs to temporary files when needed
+3. **GIF decoding**: Decodes GIF frames using the `gif` crate
+4. **ASCII conversion**: Converts each frame to ASCII art based on pixel brightness
+5. **Dimension preservation**: Preserves original dimensions and aspect ratios by default
+6. **Output generation**: Either displays in terminal, saves to text file, or renders to a new GIF
 
 The ASCII conversion process maps pixel brightness to appropriate ASCII characters, with either a simple or detailed character set. For colored output, it includes ANSI color codes for terminal display or renders characters with their original colors into a new GIF.
 
@@ -259,6 +311,9 @@ The dimension calculation system ensures that:
 - `crossterm` - For terminal manipulation
 - `anyhow` - For error handling
 - `tokio` - For asynchronous operation
+- `reqwest` - For HTTP downloads
+- `url` - For URL parsing and validation
+- `tempfile` - For temporary file management
 
 ## License
 
@@ -267,4 +322,3 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
-

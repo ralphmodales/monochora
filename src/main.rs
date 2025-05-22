@@ -5,6 +5,7 @@ use monochora::{
     display::{display_ascii_animation, get_terminal_size, save_ascii_to_file},
     handler::decode_gif,
     output::{ascii_frames_to_gif, AsciiGifOutputOptions},
+    web::get_input_path,
 };
 use std::path::PathBuf;
 
@@ -12,7 +13,7 @@ use std::path::PathBuf;
 #[clap(author, version, about = "Convert GIF images to ASCII art animations")]
 struct Args {
     #[clap(short, long)]
-    input: PathBuf,
+    input: String,  
 
     #[clap(short, long)]
     output: Option<PathBuf>,
@@ -61,8 +62,12 @@ struct Args {
 async fn main() -> Result<()> {
     let args = Args::parse();
 
-    println!("Loading GIF: {}", args.input.display());
-    let gif_data = decode_gif(&args.input).context("Failed to decode GIF")?;
+    println!("Loading GIF: {}", args.input);
+    
+    let input_path = get_input_path(&args.input).await
+        .context("Failed to get input path")?;
+    
+    let gif_data = decode_gif(&input_path).context("Failed to decode GIF")?;
     
     println!(
         "Loaded GIF: {} frames, {}x{}, loop count: {}",
@@ -110,9 +115,13 @@ async fn main() -> Result<()> {
 
     if args.gif_output {
         let output_path = args.output.unwrap_or_else(|| {
-            let mut path = args.input.file_stem().unwrap().to_os_string();
-            path.push("_ascii.gif");
-            PathBuf::from(path)
+            if args.input.starts_with("http") {
+                PathBuf::from("downloaded_gif_ascii.gif")
+            } else {
+                let mut path = PathBuf::from(&args.input).file_stem().unwrap().to_os_string();
+                path.push("_ascii.gif");
+                PathBuf::from(path)
+            }
         });
         
         println!("Generating ASCII GIF animation to: {}", output_path.display());
@@ -132,9 +141,13 @@ async fn main() -> Result<()> {
         println!("Done!");
     } else if args.save || args.output.is_some() {
         let output_path = args.output.unwrap_or_else(|| {
-            let mut path = args.input.file_stem().unwrap().to_os_string();
-            path.push("_ascii.txt");
-            PathBuf::from(path)
+            if args.input.starts_with("http") {
+                PathBuf::from("downloaded_gif_ascii.txt")
+            } else {
+                let mut path = PathBuf::from(&args.input).file_stem().unwrap().to_os_string();
+                path.push("_ascii.txt");
+                PathBuf::from(path)
+            }
         });
         
         println!("Saving ASCII animation to: {}", output_path.display());
