@@ -16,7 +16,7 @@ pub struct GifData {
     pub loop_count: u16, 
 }
 
-/pub fn decode_gif<P: AsRef<Path>>(path: P) -> Result<GifData> {
+pub fn decode_gif<P: AsRef<Path>>(path: P) -> Result<GifData> {
     let file = File::open(path).context("Failed to open GIF file")?;
     let mut options = DecodeOptions::new();
     options.set_color_output(gif::ColorOutput::RGBA);
