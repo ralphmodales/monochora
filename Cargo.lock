@@ -958,6 +958,7 @@ dependencies = [
  "gif 0.12.0",
  "image",
  "imageproc",
+ "rayon",
  "reqwest",
  "rusttype",
  "tempfile",

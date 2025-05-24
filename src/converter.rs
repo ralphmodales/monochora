@@ -1,4 +1,5 @@
 use image::{GenericImageView, Rgba};
+use rayon::prelude::*;
 
 static SIMPLE_CHARS: &[char] = &[' ', '.', ':', '-', '=', '+', '*', '#', '%', '@'];
 static DETAILED_CHARS: &[char] = &[
@@ -34,98 +35,95 @@ impl Default for AsciiConverterConfig {
 
 pub fn image_to_ascii<I>(image: &I, config: &AsciiConverterConfig) -> Vec<String> 
 where
-    I: GenericImageView<Pixel = Rgba<u8>>,
+    I: GenericImageView<Pixel = Rgba<u8>> + Sync,
 {
     let chars = if config.detailed { DETAILED_CHARS } else { SIMPLE_CHARS };
     
     let (img_width, img_height) = image.dimensions();
     
-     let (target_width, target_height) = calculate_target_dimensions(
+    let (target_width, target_height) = calculate_target_dimensions(
         img_width, 
         img_height, 
         config
     );
     
-    let mut result = Vec::with_capacity(target_height as usize);
-    
-    for y in 0..target_height {
-        let mut line = String::with_capacity(target_width as usize);
-        
-        for x in 0..target_width {
-            let img_x = (x as f32 / target_width as f32 * img_width as f32) as u32;
-            let img_y = (y as f32 / target_height as f32 * img_height as f32) as u32;
+    (0..target_height)
+        .into_par_iter()
+        .map(|y| {
+            let mut line = String::with_capacity(target_width as usize);
             
-            let pixel = image.get_pixel(img_x, img_y);
-            let [r, g, b, a] = pixel.0;
-            
-            if a == 0 {
-                line.push(' ');
-                continue;
+            for x in 0..target_width {
+                let img_x = (x as f32 / target_width as f32 * img_width as f32) as u32;
+                let img_y = (y as f32 / target_height as f32 * img_height as f32) as u32;
+                
+                let pixel = image.get_pixel(img_x, img_y);
+                let [r, g, b, a] = pixel.0;
+                
+                if a == 0 {
+                    line.push(' ');
+                    continue;
+                }
+                
+                let brightness = (0.299 * r as f32 + 0.587 * g as f32 + 0.114 * b as f32) / 255.0;
+                
+                let brightness = if config.invert { 1.0 - brightness } else { brightness };
+                
+                let index = (brightness * (chars.len() - 1) as f32).round() as usize;
+                let ascii_char = chars[index];
+                
+                line.push(ascii_char);
             }
             
-            let brightness = (0.299 * r as f32 + 0.587 * g as f32 + 0.114 * b as f32) / 255.0;
-            
-            let brightness = if config.invert { 1.0 - brightness } else { brightness };
-            
-            let index = (brightness * (chars.len() - 1) as f32).round() as usize;
-            let ascii_char = chars[index];
-            
-            line.push(ascii_char);
-        }
-        
-        result.push(line);
-    }
-    
-    result
+            line
+        })
+        .collect()
 }
 
 pub fn image_to_colored_ascii<I>(image: &I, config: &AsciiConverterConfig) -> Vec<String> 
 where
-    I: GenericImageView<Pixel = Rgba<u8>>,
+    I: GenericImageView<Pixel = Rgba<u8>> + Sync,
 {
     let chars = if config.detailed { DETAILED_CHARS } else { SIMPLE_CHARS };
     
     let (img_width, img_height) = image.dimensions();
     
-     let (target_width, target_height) = calculate_target_dimensions(
+    let (target_width, target_height) = calculate_target_dimensions(
         img_width, 
         img_height, 
         config
     );
     
-    let mut result = Vec::with_capacity(target_height as usize);
-    
-    for y in 0..target_height {
-        let mut line = String::new();
-        
-        for x in 0..target_width {
-            let img_x = (x as f32 / target_width as f32 * img_width as f32) as u32;
-            let img_y = (y as f32 / target_height as f32 * img_height as f32) as u32;
+    (0..target_height)
+        .into_par_iter()
+        .map(|y| {
+            let mut line = String::new();
             
-            let pixel = image.get_pixel(img_x, img_y);
-            let [r, g, b, a] = pixel.0;
-            
-            if a == 0 {
-                line.push(' ');
-                continue;
+            for x in 0..target_width {
+                let img_x = (x as f32 / target_width as f32 * img_width as f32) as u32;
+                let img_y = (y as f32 / target_height as f32 * img_height as f32) as u32;
+                
+                let pixel = image.get_pixel(img_x, img_y);
+                let [r, g, b, a] = pixel.0;
+                
+                if a == 0 {
+                    line.push(' ');
+                    continue;
+                }
+                
+                let brightness = (0.299 * r as f32 + 0.587 * g as f32 + 0.114 * b as f32) / 255.0;
+                
+                let brightness = if config.invert { 1.0 - brightness } else { brightness };
+                
+                let index = (brightness * (chars.len() - 1) as f32).round() as usize;
+                let ascii_char = chars[index];
+                
+                line.push_str(&format!("\x1b[38;2;{};{};{}m{}", r, g, b, ascii_char));
             }
             
-            let brightness = (0.299 * r as f32 + 0.587 * g as f32 + 0.114 * b as f32) / 255.0;
-            
-            let brightness = if config.invert { 1.0 - brightness } else { brightness };
-            
-            let index = (brightness * (chars.len() - 1) as f32).round() as usize;
-            let ascii_char = chars[index];
-            
-            line.push_str(&format!("\x1b[38;2;{};{};{}m{}", r, g, b, ascii_char));
-        }
-        
-        // Reset color at end of line
-        line.push_str("\x1b[0m");
-        result.push(line);
-    }
-    
-    result
+            line.push_str("\x1b[0m");
+            line
+        })
+        .collect()
 }
 
 fn calculate_target_dimensions(

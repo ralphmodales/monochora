@@ -4,6 +4,7 @@ use crossterm::{
     execute,
     terminal::{Clear, ClearType, size},
 };
+use rayon::prelude::*;
 use std::io::{self, Write};
 use std::time::Duration;
 use tokio::time::sleep;
@@ -83,16 +84,28 @@ pub fn save_ascii_to_file<P: AsRef<std::path::Path>>(
     
     let separator = String::from_utf8(vec![b'='; 80]).unwrap();
     
-    for (i, frame) in frames.iter().enumerate() {
-        writeln!(writer, "{}", separator)?;
-        writeln!(writer, "Frame {}", i + 1)?;
-        writeln!(writer, "{}", separator)?;
-        
-        for line in frame {
-            writeln!(writer, "{}", line)?;
-        }
-        
-        writeln!(writer)?;
+    let frame_strings: Vec<String> = frames
+        .par_iter()
+        .enumerate()
+        .map(|(i, frame)| {
+            let mut frame_content = String::new();
+            frame_content.push_str(&separator);
+            frame_content.push('\n');
+            frame_content.push_str(&format!("Frame {}\n", i + 1));
+            frame_content.push_str(&separator);
+            frame_content.push('\n');
+            
+            for line in frame {
+                frame_content.push_str(line);
+                frame_content.push('\n');
+            }
+            frame_content.push('\n');
+            frame_content
+        })
+        .collect();
+    
+    for frame_string in frame_strings {
+        write!(writer, "{}", frame_string)?;
     }
     
     Ok(())
