@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use crate::{MonochoraError, Result};
 use gif::{Encoder, Frame, Repeat};
 use image::{Rgb, RgbImage};
 use imageproc::drawing::draw_text_mut;
@@ -7,6 +7,7 @@ use std::fs::File;
 use std::path::Path;
 use std::sync::Arc;
 use rayon::prelude::*;
+use tracing::debug;
 
 pub struct AsciiGifOutputOptions {
     pub font_size: f32,
@@ -28,8 +29,24 @@ impl Default for AsciiGifOutputOptions {
     }
 }
 
+impl AsciiGifOutputOptions {
+    pub fn validate(&self) -> Result<()> {
+        if self.font_size <= 0.0 || self.font_size > 200.0 {
+            return Err(MonochoraError::InvalidFontSize { size: self.font_size });
+        }
+        
+        if self.line_height_multiplier <= 0.0 || self.line_height_multiplier > 10.0 {
+            return Err(MonochoraError::Config(
+                format!("Invalid line height multiplier: {}", self.line_height_multiplier)
+            ));
+        }
+        
+        Ok(())
+    }
+}
+
 fn create_adaptive_palette(bg_color: Rgb<u8>, text_color: Rgb<u8>, font_size: f32) -> Vec<u8> {
-    let mut palette = Vec::new();
+    let mut palette = Vec::with_capacity(256 * 3);
     
     palette.extend_from_slice(&[bg_color[0], bg_color[1], bg_color[2]]);
     palette.extend_from_slice(&[text_color[0], text_color[1], text_color[2]]);
@@ -81,9 +98,14 @@ fn create_adaptive_palette(bg_color: Rgb<u8>, text_color: Rgb<u8>, font_size: f3
     palette
 }
 
-fn quantize_to_adaptive_palette(image: &RgbImage, palette: &[u8], font_size: f32) -> Vec<u8> {
+fn quantize_to_adaptive_palette(image: &RgbImage, palette: &[u8], font_size: f32) -> Result<Vec<u8>> {
     let colors_count = palette.len() / 3;
-    let mut indexed_data = Vec::with_capacity(image.width() as usize * image.height() as usize);
+    if colors_count == 0 {
+        return Err(MonochoraError::Config("Empty color palette".to_string()));
+    }
+    
+    let pixel_count = image.width() as usize * image.height() as usize;
+    let mut indexed_data = Vec::with_capacity(pixel_count);
     
     let precision_threshold = if font_size < 2.0 { 5 } else { 15 };
     
@@ -126,7 +148,7 @@ fn quantize_to_adaptive_palette(image: &RgbImage, palette: &[u8], font_size: f32
         indexed_data.push(best_index);
     }
     
-    indexed_data
+    Ok(indexed_data)
 }
 
 fn render_ascii_to_image(
@@ -136,7 +158,11 @@ fn render_ascii_to_image(
     scale: Scale,
     font: &Font,
     options: &AsciiGifOutputOptions,
-) -> RgbImage {
+) -> Result<RgbImage> {
+    if width == 0 || height == 0 {
+        return Err(MonochoraError::InvalidDimensions { width, height });
+    }
+    
     let mut image = RgbImage::from_pixel(width, height, options.bg_color);
     let line_height = scale.y;
     let start_y = 0;
@@ -158,7 +184,34 @@ fn render_ascii_to_image(
         }
     }
     
-    image
+    Ok(image)
+}
+
+fn calculate_dimensions_from_ascii(
+    ascii_frames: &[Vec<String>],
+    _options: &AsciiGifOutputOptions,
+) -> Result<(u32, u32, usize, usize)> {
+    if ascii_frames.is_empty() {
+        return Err(MonochoraError::Config("No ASCII frames provided".to_string()));
+    }
+    
+    let max_line_length = ascii_frames
+        .iter()
+        .flat_map(|frame| frame.iter().map(|line| line.chars().count()))
+        .max()
+        .unwrap_or(80);
+
+    let max_lines = ascii_frames
+        .iter()
+        .map(|frame| frame.len())
+        .max()
+        .unwrap_or(24);
+    
+    if max_line_length == 0 || max_lines == 0 {
+        return Err(MonochoraError::Config("ASCII frames contain no content".to_string()));
+    }
+    
+    Ok((max_line_length as u32, max_lines as u32, max_line_length, max_lines))
 }
 
 pub fn ascii_frames_to_gif<P: AsRef<Path>>(
@@ -186,62 +239,82 @@ pub fn ascii_frames_to_gif_with_dimensions<P: AsRef<Path>>(
     options: &AsciiGifOutputOptions,
     target_dimensions: Option<(u32, u32)>,
 ) -> Result<()> {
+    options.validate()?;
+    
+    if ascii_frames.is_empty() {
+        return Err(MonochoraError::Config("No ASCII frames to convert".to_string()));
+    }
+    
+    if frame_delays.is_empty() {
+        return Err(MonochoraError::Config("No frame delays provided".to_string()));
+    }
+    
     let font_data = include_bytes!("../resources/DejaVuSansMono.ttf");
-    let font = Arc::new(Font::try_from_bytes(font_data as &[u8])
-        .context("Failed to load default font")?);
+    let font = Arc::new(
+        Font::try_from_bytes(font_data as &[u8])
+            .ok_or_else(|| MonochoraError::FontLoad("Failed to load embedded font".to_string()))?
+    );
 
-    let max_line_length = ascii_frames
-        .iter()
-        .flat_map(|frame| frame.iter().map(|line| line.chars().count()))
-        .max()
-        .unwrap_or(80);
+    let (_, _, max_line_length, max_lines) = calculate_dimensions_from_ascii(ascii_frames, options)?;
 
-    let max_lines = ascii_frames
-        .iter()
-        .map(|frame| frame.len())
-        .max()
-        .unwrap_or(24);
+    let (width, height, scale) = match target_dimensions {
+        Some((target_width, target_height)) => {
+            if target_width == 0 || target_height == 0 {
+                return Err(MonochoraError::InvalidDimensions { 
+                    width: target_width, 
+                    height: target_height 
+                });
+            }
+            
+            let scale = Scale {
+                x: options.font_size,
+                y: options.font_size,
+            };
+            
+            (target_width, target_height, scale)
+        }
+        None => {
+            let scale = Scale {
+                x: options.font_size,
+                y: options.font_size,
+            };
 
-    let (width, height, scale) = if let Some((target_width, target_height)) = target_dimensions {
-        let scale = Scale {
-            x: options.font_size,
-            y: options.font_size,
-        };
-        
-        (target_width, target_height, scale)
-    } else {
-        let scale = Scale {
-            x: options.font_size,
-            y: options.font_size,
-        };
-
-        let char_width = (options.font_size * 0.6) as u32;
-        let width = max_line_length as u32 * char_width;
-        let line_height = (options.font_size * options.line_height_multiplier) as u32;
-        let height = max_lines as u32 * line_height + 20;
-        
-        (width, height, scale)
+            let char_width = (options.font_size * 0.6) as u32;
+            let width = max_line_length as u32 * char_width;
+            let line_height = (options.font_size * options.line_height_multiplier) as u32;
+            let height = max_lines as u32 * line_height + 20;
+            
+            (width, height, scale)
+        }
     };
 
-    let file = File::create(output_path).context("Failed to create output GIF file")?;
+    if width == 0 || height == 0 {
+        return Err(MonochoraError::InvalidDimensions { width, height });
+    }
+
+    let file = File::create(output_path.as_ref())
+        .map_err(|e| MonochoraError::Io(e))?;
     
     let palette = create_adaptive_palette(options.bg_color, options.text_color, options.font_size);
     
     let mut encoder = Encoder::new(file, width as u16, height as u16, &palette)
-        .context("Failed to create GIF encoder")?;
+        .map_err(|e| MonochoraError::GifDecode(format!("Failed to create GIF encoder: {}", e)))?;
 
-    if loop_count == 0 {
-        encoder.set_repeat(Repeat::Infinite)
-            .context("Failed to set GIF to loop infinitely")?;
+    let repeat_setting = if loop_count == 0 {
+        Repeat::Infinite
     } else {
-        encoder.set_repeat(Repeat::Finite(loop_count))
-            .context("Failed to set GIF loop count")?;
-    }
+        Repeat::Finite(loop_count)
+    };
     
-    let rendered_frames: Vec<(Vec<u8>, u16)> = ascii_frames
+    encoder.set_repeat(repeat_setting)
+        .map_err(|e| MonochoraError::GifDecode(format!("Failed to set GIF repeat: {}", e)))?;
+    
+    debug!("Rendering {} frames in parallel", ascii_frames.len());
+    
+    let frame_results: Result<Vec<(Vec<u8>, u16)>> = ascii_frames
         .par_iter()
         .enumerate()
-        .map(|(frame_idx, ascii_frame)| {
+        .map(|(frame_idx, ascii_frame)| -> Result<(Vec<u8>, u16)> {
             let image = render_ascii_to_image(
                 ascii_frame, 
                 width, 
@@ -249,7 +322,7 @@ pub fn ascii_frames_to_gif_with_dimensions<P: AsRef<Path>>(
                 scale, 
                 &font, 
                 options
-            );
+            )?;
 
             let frame_delay = if frame_idx < frame_delays.len() {
                 frame_delays[frame_idx]
@@ -259,12 +332,21 @@ pub fn ascii_frames_to_gif_with_dimensions<P: AsRef<Path>>(
                 100
             };
 
-            let indexed_data = quantize_to_adaptive_palette(&image, &palette, options.font_size);
-            (indexed_data, frame_delay)
+            let indexed_data = quantize_to_adaptive_palette(&image, &palette, options.font_size)?;
+            Ok((indexed_data, frame_delay))
         })
         .collect();
     
-    for (indexed_data, frame_delay) in rendered_frames {
+    let rendered_frames = frame_results?;
+    
+    for (frame_idx, (indexed_data, frame_delay)) in rendered_frames.into_iter().enumerate() {
+        if indexed_data.len() != (width * height) as usize {
+            return Err(MonochoraError::GifDecode(
+                format!("Frame {} has incorrect data size: expected {}, got {}", 
+                    frame_idx, width * height, indexed_data.len())
+            ));
+        }
+        
         let mut frame = Frame::from_palette_pixels(
             width as u16,
             height as u16,
@@ -274,8 +356,11 @@ pub fn ascii_frames_to_gif_with_dimensions<P: AsRef<Path>>(
         );
 
         frame.delay = (frame_delay / 10).max(1);
-        encoder.write_frame(&frame).context("Failed to write GIF frame")?;
+        
+        encoder.write_frame(&frame)
+            .map_err(|e| MonochoraError::GifDecode(format!("Failed to write frame {}: {}", frame_idx, e)))?;
     }
 
+    debug!("Successfully wrote {} frames to GIF", ascii_frames.len());
     Ok(())
 }

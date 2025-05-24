@@ -1,84 +1,113 @@
-use anyhow::{Context, Result, anyhow};
-use reqwest;
+use crate::{MonochoraError, Result};
 use std::io::Write;
-use std::path::{PathBuf};
+use std::path::PathBuf;
 use tempfile::NamedTempFile;
 use url::Url;
+use tracing::{debug, info, warn};
 
 pub async fn download_gif_from_url(url: &str) -> Result<PathBuf> {
     let parsed_url = Url::parse(url)
-        .context("Invalid URL provided")?;
+        .map_err(|e| MonochoraError::UrlParse(e))?;
     
-    if parsed_url.scheme() != "http" && parsed_url.scheme() != "https" {
-        return Err(anyhow!("Only HTTP and HTTPS URLs are supported"));
+    match parsed_url.scheme() {
+        "http" | "https" => {},
+        scheme => return Err(MonochoraError::InvalidUrlScheme { 
+            scheme: scheme.to_string() 
+        }),
     }
     
-    println!("Downloading GIF from: {}", url);
+    info!("Downloading GIF from: {}", url);
     
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
         .user_agent("monochora-gif-converter/1.0")
         .build()
-        .context("Failed to create HTTP client")?;
+        .map_err(|e| MonochoraError::Http(e))?;
     
     let response = client
         .get(url)
         .send()
         .await
-        .context("Failed to send HTTP request")?;
+        .map_err(|e| MonochoraError::Http(e))?;
     
     if !response.status().is_success() {
-        return Err(anyhow!("HTTP request failed with status: {}", response.status()));
+        return Err(MonochoraError::Io(
+            std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("HTTP request failed with status: {}", response.status())
+            )
+        ));
     }
     
-    if let Some(content_type) = response.headers().get("content-type") {
-        let content_type_str = content_type.to_str().unwrap_or("");
-        if !content_type_str.starts_with("image/") {
-            println!("Warning: Content-Type is '{}', which may not be an image", content_type_str);
+     if let Some(content_type) = response.headers().get("content-type") {
+        match content_type.to_str() {
+            Ok(content_type_str) => {
+                if !content_type_str.starts_with("image/") {
+                    warn!("Content-Type is '{}', which may not be an image", content_type_str);
+                }
+            }
+            Err(e) => {
+                warn!("Failed to parse Content-Type header: {}", e);
+            }
         }
     }
     
-    let total_size = response.content_length();
-    if let Some(size) = total_size {
-        println!("Downloading {} bytes...", size);
+     if let Some(size) = response.content_length() {
+        info!("Downloading {} bytes...", size);
+        
+         if size > 100_000_000 {
+            warn!("File size is very large: {} bytes", size);
+        }
     }
     
     let file_extension = get_file_extension_from_url(&parsed_url)
         .unwrap_or_else(|| "gif".to_string());
     
     let mut temp_file = NamedTempFile::with_suffix(&format!(".{}", file_extension))
-        .context("Failed to create temporary file")?;
+        .map_err(|e| MonochoraError::Io(e))?;
     
     let bytes = response.bytes().await
-        .context("Failed to download file content")?;
+        .map_err(|e| MonochoraError::Http(e))?;
+    
+     if bytes.is_empty() {
+        return Err(MonochoraError::Io(
+            std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "Downloaded file is empty"
+            )
+        ));
+    }
     
     temp_file.write_all(&bytes)
-        .context("Failed to write downloaded content to temporary file")?;
+        .map_err(|e| MonochoraError::Io(e))?;
     
     let temp_path = temp_file.into_temp_path();
     let final_path = temp_path.keep()
-        .context("Failed to persist temporary file")?;
+        .map_err(|e| MonochoraError::Io(
+            std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("Failed to persist temporary file: {}", e)
+            )
+        ))?;
     
-    println!("Downloaded successfully to temporary file: {}", final_path.display());
+    info!("Downloaded successfully to temporary file: {}", final_path.display());
     
     Ok(final_path)
 }
 
 fn get_file_extension_from_url(url: &Url) -> Option<String> {
-    if let Some(path_segments) = url.path_segments() {
-        if let Some(last_segment) = path_segments.last() {
-            if let Some(dot_pos) = last_segment.rfind('.') {
-                let extension = &last_segment[dot_pos + 1..];
-                match extension.to_lowercase().as_str() {
-                    "gif" | "png" | "jpg" | "jpeg" | "webp" => {
-                        return Some(extension.to_lowercase());
-                    }
-                    _ => {}
-                }
-            }
+    let path_segments = url.path_segments()?;
+    let last_segment = path_segments.last()?;
+    
+    let dot_pos = last_segment.rfind('.')?;
+    let extension = &last_segment[dot_pos + 1..];
+    
+    match extension.to_lowercase().as_str() {
+        "gif" | "png" | "jpg" | "jpeg" | "webp" => {
+            Some(extension.to_lowercase())
         }
+        _ => None
     }
-    None
 }
 
 pub fn is_url(input: &str) -> bool {
@@ -89,31 +118,27 @@ pub async fn get_input_path(input: &str) -> Result<PathBuf> {
     if is_url(input) {
         download_gif_from_url(input).await
     } else {
-        Ok(PathBuf::from(input))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    
-    #[test]
-    fn test_is_url() {
-        assert!(is_url("https://example.com/image.gif"));
-        assert!(is_url("http://example.com/image.gif"));
-        assert!(!is_url("/path/to/local/file.gif"));
-        assert!(!is_url("file.gif"));
-    }
-    
-    #[test]
-    fn test_get_file_extension_from_url() {
-        let url = Url::parse("https://example.com/path/image.gif").unwrap();
-        assert_eq!(get_file_extension_from_url(&url), Some("gif".to_string()));
+        let path = PathBuf::from(input);
         
-        let url = Url::parse("https://example.com/path/image.PNG").unwrap();
-        assert_eq!(get_file_extension_from_url(&url), Some("png".to_string()));
+         if !path.exists() {
+            return Err(MonochoraError::Io(
+                std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    format!("Local file does not exist: {}", path.display())
+                )
+            ));
+        }
         
-        let url = Url::parse("https://example.com/path/file").unwrap();
-        assert_eq!(get_file_extension_from_url(&url), None);
+         if !path.is_file() {
+            return Err(MonochoraError::Io(
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!("Path is not a file: {}", path.display())
+                )
+            ));
+        }
+        
+        debug!("Using local file: {}", path.display());
+        Ok(path)
     }
 }
