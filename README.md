@@ -26,6 +26,14 @@ Monochora is a GIF to ASCII art converter written in Rust. It can transform GIF 
 
 ## Installation
 
+### Using Cargo (Recommended)
+
+The easiest way to install Monochora is using Cargo:
+
+```bash
+cargo install monochora
+```
+
 ### From Source
 
 1. Make sure you have Rust and Cargo installed. If not, install it from [rust-lang.org](https://www.rust-lang.org/tools/install).
@@ -36,12 +44,17 @@ Monochora is a GIF to ASCII art converter written in Rust. It can transform GIF 
    cd monochora
    ```
 
-3. Build the project:
+3. Build and install:
+   ```bash
+   cargo install --path .
+   ```
+
+   Or just build without installing:
    ```bash
    cargo build --release
    ```
 
-4. The binary will be available at `target/release/monochora`
+4. If you chose to just build, the binary will be available at `target/release/monochora`
 
 ## Usage
 
