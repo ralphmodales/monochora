@@ -38,8 +38,8 @@ struct Args {
     #[clap(short = 's', long, default_value_t = false, help = "Save to file")]
     save: bool,
     
-    #[clap(long, help = "Output path for GIF format")]
-    gif_output: Option<PathBuf>,
+    #[clap(long, help = "Generate GIF output. Optionally specify path (e.g., --gif-output or --gif-output path/name.gif)")]
+    gif_output: Option<Option<PathBuf>>,
 
     #[clap(long, default_value_t = 14.0, help = "Font size for GIF output")]
     font_size: f32,
@@ -96,6 +96,54 @@ fn validate_args(args: &Args) -> Result<(), MonochoraError> {
         if threads == 0 || threads > 1000 {
             return Err(MonochoraError::Config(format!("Invalid thread count: {}", threads)));
         }
+    }
+
+    validate_conflicting_options(args)?;
+
+    Ok(())
+}
+
+fn validate_conflicting_options(args: &Args) -> Result<(), MonochoraError> {
+    if args.colored && args.gif_output.is_some() {
+        return Err(MonochoraError::Config(
+            "Colored output (--colored) is not yet supported with GIF output (--gif-output). Coming soon!".to_string()
+        ));
+    }
+
+    if args.white_on_black && args.black_on_white {
+        return Err(MonochoraError::Config(
+            "Cannot use both --white-on-black and --black-on-white at the same time".to_string()
+        ));
+    }
+
+    let output_modes = [
+        args.gif_output.is_some(),
+        args.save || args.output.is_some(),
+    ];
+    let active_modes = output_modes.iter().filter(|&&x| x).count();
+    
+    if active_modes > 1 {
+        return Err(MonochoraError::Config(
+            "Cannot use multiple output modes simultaneously. Choose one: --gif-output, --save/--output, or terminal display".to_string()
+        ));
+    }
+
+    if (args.white_on_black || args.black_on_white) && args.gif_output.is_none() {
+        return Err(MonochoraError::Config(
+            "Background color options (--white-on-black, --black-on-white) can only be used with --gif-output".to_string()
+        ));
+    }
+
+    if args.font_size != 14.0 && args.gif_output.is_none() {
+        return Err(MonochoraError::Config(
+            "Font size (--font-size) can only be used with --gif-output".to_string()
+        ));
+    }
+
+    if args.fit_terminal && (args.gif_output.is_some() || args.save || args.output.is_some()) {
+        return Err(MonochoraError::Config(
+            "Terminal fitting (--fit-terminal) cannot be used with file output options".to_string()
+        ));
     }
 
     Ok(())
@@ -192,6 +240,35 @@ fn generate_default_output_path(input: &str) -> PathBuf {
     }
 }
 
+fn generate_gif_output_path(input: &str, gif_output: &Option<Option<PathBuf>>) -> PathBuf {
+    match gif_output {
+        Some(Some(path)) => {
+            if path.extension().is_none() {
+                path.with_extension("gif")
+            } else {
+                path.clone()
+            }
+        }
+        Some(None) => {
+            if input.starts_with("http") {
+                PathBuf::from("ascii_downloaded.gif")
+            } else {
+                let input_path = PathBuf::from(input);
+                match input_path.file_stem() {
+                    Some(stem) => {
+                        let mut name = String::from("ascii_");
+                        name.push_str(&stem.to_string_lossy());
+                        name.push_str(".gif");
+                        PathBuf::from(name)
+                    }
+                    None => PathBuf::from("ascii_output.gif")
+                }
+            }
+        }
+        None => unreachable!("This function should only be called when gif_output is Some"),
+    }
+}
+
 async fn process_ascii_conversion(
     args: &Args,
     gif_data: &monochora::handler::GifData,
@@ -234,16 +311,7 @@ async fn handle_gif_output(
     frame_delays: &[u16],
     gif_data: &monochora::handler::GifData,
 ) -> Result<(), MonochoraError> {
-    let gif_output_path = match &args.gif_output {
-        Some(path) => path.clone(),
-        None => return Ok(()),
-    };
-
-    let output_path = if gif_output_path.extension().is_none() {
-        gif_output_path.with_extension("gif")
-    } else {
-        gif_output_path
-    };
+    let output_path = generate_gif_output_path(&args.input, &args.gif_output);
     
     if !args.quiet {
         info!("Generating ASCII GIF animation: {}", output_path.display());
@@ -332,8 +400,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     if let Err(e) = validate_args(&args) {
-        error!("Invalid arguments: {}", e);
-        return Err(e.into());
+        eprintln!("Error: {}", e);
+        std::process::exit(1);
     }
 
     if let Err(e) = setup_thread_pool(args.threads, args.quiet) {

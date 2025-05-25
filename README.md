@@ -21,6 +21,8 @@ Monochora is a GIF to ASCII art converter written in Rust. It can transform GIF 
 - Flexible scaling and dimension control
 - **Intelligent dimension calculation** - Proper aspect ratio preservation and character scaling
 - **Quiet mode** for batch processing
+- **Comprehensive error handling and validation**
+- **Configurable logging levels** for debugging and monitoring
 
 ## Installation
 
@@ -53,6 +55,9 @@ monochora -i https://example.com/animation.gif
 # Save as ASCII text file
 monochora -i input.gif -s
 
+# Save to specific output file
+monochora -i input.gif -o my_ascii.txt
+
 # Generate colored ASCII in terminal
 monochora -i input.gif -c
 
@@ -67,6 +72,9 @@ monochora -i input.gif -p
 
 # Save as high-quality ASCII GIF animation
 monochora -i input.gif --gif-output output.gif
+
+# Generate GIF with default name
+monochora -i input.gif --gif-output
 
 # Custom width (height calculated automatically to preserve aspect ratio)
 monochora -i input.gif -w 100
@@ -98,9 +106,8 @@ monochora -i input.gif --threads 8
 # Quiet mode for batch processing
 monochora -i input.gif -q --gif-output output.gif
 
-# Save output to a specific file
-monochora -i input.gif -o output.txt
-monochora -i input.gif --gif-output output.gif
+# Debug with detailed logging
+monochora -i input.gif --log-level debug
 
 # Download from URL and save as high-quality ASCII GIF
 monochora -i "https://example.com/cool.gif" --gif-output result.gif --black-on-white --font-size 16
@@ -114,11 +121,11 @@ Options:
   -o, --output <OUTPUT>                  Output file path for text files
   -w, --width <WIDTH>                    Target width in characters
   -H, --height <HEIGHT>                  Target height in characters
-  -c, --colored                          Use colored ASCII (ANSI colors)
+  -c, --colored                          Use colored ASCII (ANSI colors) - terminal only
   -v, --invert                           Invert brightness
   -p, --simple                           Use simple character set
   -s, --save                             Save to text file instead of playing
-      --gif-output <GIF_OUTPUT>          Output as ASCII GIF file
+      --gif-output [<GIF_OUTPUT>]        Output as ASCII GIF file (optional path)
       --font-size <FONT_SIZE>            Font size for GIF output [default: 14.0]
       --white-on-black                   White text on black background for GIF
       --black-on-white                   Black text on white background for GIF
@@ -127,9 +134,45 @@ Options:
       --preserve-aspect <PRESERVE_ASPECT> Preserve original aspect ratio [default: true]
       --threads <THREADS>                Number of threads for parallel processing
   -q, --quiet                            Suppress progress output
+      --log-level <LOG_LEVEL>            Log level (error, warn, info, debug, trace) [default: info]
   -h, --help                             Print help
   -V, --version                          Print version
 ```
+
+## Important Notes
+
+### Output Mode Restrictions
+
+Monochora enforces exclusive output modes to avoid conflicts:
+
+- **Terminal display**: Default mode when no output options are specified
+- **Text file output**: Use `--save` or `--output <file>`
+- **GIF output**: Use `--gif-output [path]`
+
+**You cannot combine multiple output modes in a single command.**
+
+### Colored ASCII Limitations
+
+- **Colored output (`--colored`)** is currently only supported for terminal display
+- GIF output with colored ASCII is coming soon
+- Colored output cannot be used with `--gif-output`
+
+### Background Color Options
+
+- `--white-on-black` and `--black-on-white` can only be used with `--gif-output`
+- These options are mutually exclusive
+- Without these flags, GIF output uses default colors (white text on black background)
+
+### Terminal Fitting
+
+- `--fit-terminal` only works with terminal display mode
+- Cannot be used with file output options (`--save`, `--output`, `--gif-output`)
+
+### Font Size
+
+- `--font-size` only applies to GIF output mode
+- Valid range: 0.1 to 100.0
+- Default: 14.0 for optimal quality/performance balance
 
 ## Performance Features
 
@@ -140,6 +183,7 @@ Monochora is optimized for high-performance processing:
 - **Optimized memory usage** - Efficient handling of large GIF files
 - **Adaptive algorithms** - Different processing strategies based on font size and output type
 - **Progress tracking** - Real-time feedback on conversion progress (unless in quiet mode)
+- **Comprehensive validation** - Input validation to prevent runtime errors
 
 ### Performance Examples
 
@@ -152,6 +196,9 @@ monochora -i input.gif -q --gif-output output.gif --font-size 12
 
 # High-performance colored terminal output
 monochora -i animation.gif -c --threads 8
+
+# Debug mode with detailed logging
+monochora -i animation.gif --log-level debug --threads 4
 ```
 
 ## Advanced GIF Output
@@ -183,6 +230,9 @@ monochora -i input.gif --gif-output large.gif --font-size 24
 
 # Custom styling with adaptive palettes
 monochora -i input.gif --gif-output custom.gif --black-on-white --font-size 16
+
+# Auto-generated output filename
+monochora -i my_animation.gif --gif-output  # Creates ascii_my_animation.gif
 ```
 
 ## Examples
@@ -252,13 +302,21 @@ monochora -i animation.gif -w 120 -H 40 --preserve-aspect false
 ### Save as ASCII Text
 
 ```bash
-monochora -i animation.gif -s -o animation_ascii.txt
+# Save with default filename
+monochora -i animation.gif -s
+
+# Save to specific file
+monochora -i animation.gif -o my_ascii_art.txt
 ```
 
 ### Save as High-Quality ASCII GIF
 
 ```bash
-monochora -i animation.gif --gif-output animation_ascii.gif
+# Default output filename (ascii_animation.gif)
+monochora -i animation.gif --gif-output
+
+# Custom output filename
+monochora -i animation.gif --gif-output my_ascii.gif
 ```
 
 ### Custom Style GIF with Optimization
@@ -278,6 +336,27 @@ Create a large, detailed ASCII GIF with optimized processing:
 ```bash
 monochora -i small_animation.gif --gif-output large_result.gif --scale 2.0 --font-size 8 --threads 8
 ```
+
+## Error Handling and Validation
+
+Monochora includes comprehensive input validation:
+
+### Dimension Validation
+- Width and height must be between 1 and 10,000 characters
+- Font size must be between 0.1 and 100.0
+- Scale factor must be between 0.1 and 10.0
+- Thread count must be between 1 and 1,000
+
+### Conflict Detection
+- Prevents combining incompatible output modes
+- Validates color scheme combinations
+- Ensures options are used with appropriate output types
+
+### Common Error Messages
+- **Invalid font size**: Font size out of valid range
+- **Invalid dimensions**: Width or height out of bounds
+- **Config error**: Conflicting or invalid option combinations
+- **Thread pool error**: Issues with parallel processing setup
 
 ## URL Support
 
@@ -397,16 +476,41 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+## Debugging and Logging
+
+Monochora includes comprehensive logging for debugging and monitoring:
+
+### Log Levels
+- **error**: Only critical errors
+- **warn**: Warnings and errors
+- **info**: General information, warnings, and errors (default)
+- **debug**: Detailed processing information
+- **trace**: Extremely verbose output for debugging
+
+### Debugging Examples
+
+```bash
+# Debug mode for troubleshooting
+monochora -i problematic.gif --log-level debug
+
+# Trace mode for detailed analysis
+monochora -i animation.gif --log-level trace --threads 4
+
+# Error-only mode for production
+monochora -i input.gif --log-level error --quiet
+```
+
 ## How It Works
 
 Monochora works by:
 
-1. **Input handling**: Accepts both local file paths and URLs (HTTP/HTTPS)
-2. **URL processing**: Downloads GIFs from URLs to temporary files when needed
-3. **GIF decoding**: Decodes GIF frames using the `gif` crate with parallel processing
-4. **ASCII conversion**: Converts each frame to ASCII art based on pixel brightness using parallel processing
-5. **Dimension calculation**: Intelligently calculates dimensions with proper character aspect ratio handling
-6. **Advanced output generation**: 
+1. **Input validation**: Comprehensive validation of all command-line arguments
+2. **Input handling**: Accepts both local file paths and URLs (HTTP/HTTPS)
+3. **URL processing**: Downloads GIFs from URLs to temporary files when needed
+4. **GIF decoding**: Decodes GIF frames using the `gif` crate with parallel processing
+5. **ASCII conversion**: Converts each frame to ASCII art based on pixel brightness using parallel processing
+6. **Dimension calculation**: Intelligently calculates dimensions with proper character aspect ratio handling
+7. **Advanced output generation**: 
    - Terminal display with color support
    - Text file output with frame separators
    - High-quality ASCII GIF generation with adaptive palettes
@@ -451,6 +555,8 @@ The ASCII GIF output uses several optimization techniques:
 - `url` - For URL parsing and validation
 - `tempfile` - For secure temporary file management
 - `rayon` - For high-performance parallel processing
+- `tracing` - For structured logging and debugging
+- `tracing-subscriber` - For log formatting and filtering
 
 ## License
 
@@ -458,4 +564,4 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## Contributing
 
-Contributions are welcome! Please feel free to submit a Pull Request. 
+Contributions are welcome! Please feel free to submit a Pull Request.
