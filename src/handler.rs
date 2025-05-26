@@ -6,11 +6,13 @@ use std::path::Path;
 use tracing::{info, warn};
 use crate::{MonochoraError, Result};
 
+#[repr(C)]
 pub struct GifFrame {
     pub image: ImageBuffer<Rgba<u8>, Vec<u8>>,
     pub delay_time_ms: u16,
 }
 
+#[repr(C)]
 pub struct GifData {
     pub frames: Vec<GifFrame>,
     pub width: u32,
@@ -18,6 +20,7 @@ pub struct GifData {
     pub loop_count: u16, 
 }
 
+#[repr(C)]
 struct RawFrameData {
     buffer: Vec<u8>,
     delay_time_ms: u16,

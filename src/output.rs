@@ -9,6 +9,7 @@ use std::sync::Arc;
 use rayon::prelude::*;
 use tracing::debug;
 
+#[repr(C)]
 pub struct AsciiGifOutputOptions {
     pub font_size: f32,
     pub bg_color: Rgb<u8>,

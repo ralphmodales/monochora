@@ -10,6 +10,7 @@ static DETAILED_CHARS: &[char] = &[
     'h', 'a', 'o', '*', '#', 'M', 'W', '&', '8', '%', 'B', '@'
 ];
 
+#[repr(C)]
 pub struct AsciiConverterConfig {
     pub width: Option<u32>,        
     pub height: Option<u32>,       

@@ -13,6 +13,7 @@ use tracing::{error, info, warn};
 
 #[derive(Parser, Debug)]
 #[clap(author, version, about = "Convert GIF images to ASCII art animations")]
+#[repr(C)]
 struct Args {
     #[clap(short, long, help = "Input GIF file path or URL")]
     input: String,
