@@ -105,11 +105,6 @@ fn validate_args(args: &Args) -> Result<(), MonochoraError> {
 }
 
 fn validate_conflicting_options(args: &Args) -> Result<(), MonochoraError> {
-    if args.colored && args.gif_output.is_some() {
-        return Err(MonochoraError::Config(
-            "Colored output (--colored) is not yet supported with GIF output (--gif-output). Coming soon!".to_string()
-        ));
-    }
 
     if args.white_on_black && args.black_on_white {
         return Err(MonochoraError::Config(
@@ -322,6 +317,7 @@ async fn handle_gif_output(
     
     let mut options = AsciiGifOutputOptions::default();
     options.font_size = args.font_size;
+    options.colored = args.colored; 
     
     if args.black_on_white {
         options.bg_color = image::Rgb([255, 255, 255]); 

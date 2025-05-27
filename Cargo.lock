@@ -974,7 +974,7 @@ dependencies = [
 
 [[package]]
 name = "monochora"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "clap",
@@ -983,6 +983,7 @@ dependencies = [
  "image",
  "imageproc",
  "rayon",
+ "regex",
  "reqwest",
  "rusttype",
  "tempfile",

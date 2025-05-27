@@ -134,7 +134,7 @@ Options:
   -o, --output <OUTPUT>                  Output file path for text files
   -w, --width <WIDTH>                    Target width in characters
   -H, --height <HEIGHT>                  Target height in characters
-  -c, --colored                          Use colored ASCII (ANSI colors) - terminal only
+  -c, --colored                          Use colored ASCII (ANSI colors)
   -v, --invert                           Invert brightness
   -p, --simple                           Use simple character set
   -s, --save                             Save to text file instead of playing
@@ -163,12 +163,6 @@ Monochora enforces exclusive output modes to avoid conflicts:
 - **GIF output**: Use `--gif-output [path]`
 
 **You cannot combine multiple output modes in a single command.**
-
-### Colored ASCII Limitations
-
-- **Colored output (`--colored`)** is currently only supported for terminal display
-- GIF output with colored ASCII is coming soon
-- Colored output cannot be used with `--gif-output`
 
 ### Background Color Options
 
@@ -524,7 +518,7 @@ Monochora works by:
 5. **ASCII conversion**: Converts each frame to ASCII art based on pixel brightness using parallel processing
 6. **Dimension calculation**: Intelligently calculates dimensions with proper character aspect ratio handling
 7. **Advanced output generation**: 
-   - Terminal display with color support
+   - Terminal display and GIF output with color support
    - Text file output with frame separators
    - High-quality ASCII GIF generation with adaptive palettes
 
