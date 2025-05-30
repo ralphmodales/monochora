@@ -10,7 +10,7 @@ Monochora is a GIF to ASCII art converter written in Rust. It can transform GIF 
 - Play the animations directly in your terminal
 - Save animations as text files or high-quality ASCII GIF files
 - Support for colored ASCII art (with ANSI color codes)
-- Customizable character sets (simple or detailed)
+- **Customizable character sets** - Built-in sets, inline strings, or custom files
 - Multiple output options (terminal, text file, or GIF output)
 - **Advanced GIF output features**:
   - Adaptive color palettes for better quality
@@ -83,6 +83,15 @@ monochora -i input.gif -v
 # Use simple character set
 monochora -i input.gif -p
 
+# Use custom character set (inline)
+monochora -i input.gif --charset " ·∘○●◉"
+
+# Use custom character set from file
+monochora -i input.gif --charset-file ./my-chars.txt
+
+# List available character sets
+monochora --list-charsets
+
 # Save as high-quality ASCII GIF animation
 monochora -i input.gif --gif-output output.gif
 
@@ -146,10 +155,73 @@ Options:
       --scale <SCALE>                    Scale factor for original dimensions
       --preserve-aspect <PRESERVE_ASPECT> Preserve original aspect ratio [default: true]
       --threads <THREADS>                Number of threads for parallel processing
+      --charset <CHARSET>                Custom character set string (ordered darkest to lightest)
+      --charset-file <CHARSET_FILE>      Path to custom character set file
+      --list-charsets                    List available character sets and exit
   -q, --quiet                            Suppress progress output
       --log-level <LOG_LEVEL>            Log level (error, warn, info, debug, trace) [default: info]
   -h, --help                             Print help
   -V, --version                          Print version
+```
+
+## Character Sets
+
+Monochora offers flexible character set options for different artistic styles and use cases:
+
+### Built-in Character Sets
+
+- **Simple** (`--simple`): ` .:-=+*#%@` - Basic 10-character set for clean, fast conversion
+- **Detailed** (default): Full 70-character set with fine gradations for high-quality output
+
+### Custom Character Sets
+
+Create your own character palettes for specialized needs:
+
+```bash
+# Artistic styles
+monochora -i art.gif --charset " ·∘○●◉"          # Geometric circles
+monochora -i photo.jpg --charset " ░▒▓█"         # Block characters
+monochora -i sketch.gif --charset " .-+*#"       # Technical style
+
+# Cultural/linguistic
+monochora -i anime.gif --charset "・〆ヲァィヵヶ"  # Japanese characters
+monochora -i mandala.gif --charset " ༄༅༆༇༈"    # Tibetan symbols
+
+# Specialized applications  
+monochora -i xray.png --charset " .-+*#%@@"      # Medical imaging
+monochora -i diagram.gif --charset "⠀⠁⠂⠃⠄⠅⠆⠇"  # Braille patterns
+```
+
+### Character Set Files
+
+Store reusable character sets in text files:
+
+```bash
+# Create a character set file
+echo " .-+*#%@@" > density.txt
+monochora -i image.gif --charset-file density.txt
+
+# Organize sets by category
+mkdir palettes
+echo " ·∘○●◉" > palettes/geometric.txt
+echo " ༄༅༆༇༈" > palettes/tibetan.txt
+monochora -i input.gif --charset-file palettes/geometric.txt
+```
+
+### Character Set Rules
+
+- **Order**: Characters must be ordered from darkest to lightest
+- **Length**: Minimum 2 characters, maximum 256 characters
+- **Uniqueness**: All characters must be unique
+- **Content**: No control characters (except tab/newline in files)
+- **Unicode**: Full UTF-8 support for international characters
+
+### Listing Available Sets
+
+Use `--list-charsets` to see examples and usage:
+
+```bash
+monochora --list-charsets
 ```
 
 ## Important Notes
@@ -163,6 +235,16 @@ Monochora enforces exclusive output modes to avoid conflicts:
 - **GIF output**: Use `--gif-output [path]`
 
 **You cannot combine multiple output modes in a single command.**
+
+### Character Set Restrictions
+
+Character set options are mutually exclusive:
+
+- **Built-in sets**: `--simple` (default uses detailed set)
+- **Inline custom**: `--charset "characters"`
+- **File-based custom**: `--charset-file path.txt`
+
+**You cannot combine multiple character set options in a single command.**
 
 ### Background Color Options
 
@@ -254,6 +336,27 @@ monochora -i animation.gif
 
 Press `q` or `Esc` to exit the animation.
 
+### Custom Character Set Examples
+
+Explore different artistic styles with custom character sets:
+
+```bash
+# Minimalist density gradient
+monochora -i portrait.gif --charset " .oO@"
+
+# Geometric progression
+monochora -i abstract.gif --charset " ·∘○●◉" -c
+
+# Technical documentation style
+monochora -i diagram.png --charset " .-=+*#" -w 120
+
+# High-contrast for readability
+monochora -i screenshot.gif --charset " ░▓█" --fit-terminal
+
+# Artistic braille output
+monochora -i pattern.gif --charset "⠀⠁⠂⠃⠄⠅⠆⠇⠈⠉⠊⠋" --save
+```
+
 ### URL Input Examples
 
 Download and play a GIF from the internet:
@@ -262,8 +365,8 @@ Download and play a GIF from the internet:
 # Simple terminal playback
 monochora -i "https://media.giphy.com/media/3o7abKhOpu0NwenH3O/giphy.gif"
 
-# Colored ASCII with custom dimensions
-monochora -i "https://example.com/animation.gif" -c -w 150 -H 75
+# Colored ASCII with custom dimensions and character set
+monochora -i "https://example.com/animation.gif" -c -w 150 -H 75 --charset " ·∘○●"
 
 # Download and save as high-quality ASCII GIF
 monochora -i "https://example.com/source.gif" --gif-output converted_ascii.gif
@@ -314,6 +417,9 @@ monochora -i animation.gif -s
 
 # Save to specific file
 monochora -i animation.gif -o my_ascii_art.txt
+
+# Save with custom character set
+monochora -i animation.gif -s --charset " ░▒▓█"
 ```
 
 ### Save as High-Quality ASCII GIF
@@ -322,15 +428,15 @@ monochora -i animation.gif -o my_ascii_art.txt
 # Default output filename (ascii_animation.gif)
 monochora -i animation.gif --gif-output
 
-# Custom output filename
-monochora -i animation.gif --gif-output my_ascii.gif
+# Custom output filename with character set
+monochora -i animation.gif --gif-output my_ascii.gif --charset " ·∘○●"
 ```
 
 ### Custom Style GIF with Optimization
 
 ```bash
-# High-quality output with custom styling
-monochora -i animation.gif --gif-output result.gif --black-on-white --font-size 18
+# High-quality output with custom styling and character set
+monochora -i animation.gif --gif-output result.gif --black-on-white --font-size 18 --charset " .-+*#"
 
 # Performance-optimized batch processing
 monochora -i animation.gif --gif-output result.gif --quiet --threads 12
@@ -354,14 +460,22 @@ Monochora includes comprehensive input validation:
 - Scale factor must be between 0.1 and 10.0
 - Thread count must be between 1 and 1,000
 
+### Character Set Validation
+- Minimum 2 characters, maximum 256 characters
+- All characters must be unique
+- No control characters (except tab/newline in files)
+- Proper UTF-8 encoding for Unicode characters
+
 ### Conflict Detection
 - Prevents combining incompatible output modes
 - Validates color scheme combinations
 - Ensures options are used with appropriate output types
+- Prevents conflicting character set options
 
 ### Common Error Messages
 - **Invalid font size**: Font size out of valid range
 - **Invalid dimensions**: Width or height out of bounds
+- **Invalid character set**: Character set validation failed
 - **Config error**: Conflicting or invalid option combinations
 - **Thread pool error**: Issues with parallel processing setup
 
@@ -437,7 +551,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Decode the GIF
     let gif_data = decode_gif(&input_path)?;
     
-    // Configure the converter
+    // Configure the converter with custom character set
+    let custom_chars: Vec<char> = " ·∘○●◉".chars().collect();
     let config = AsciiConverterConfig {
         width: Some(80),
         height: None,
@@ -446,6 +561,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         detailed: true,
         preserve_aspect_ratio: true,
         scale_factor: Some(1.5), // 150% of original size
+        custom_charset: Some(custom_chars),
     };
     
     // Convert frames to ASCII in parallel
@@ -515,14 +631,15 @@ Monochora works by:
 2. **Input handling**: Accepts both local file paths and URLs (HTTP/HTTPS)
 3. **URL processing**: Downloads GIFs from URLs to temporary files when needed
 4. **GIF decoding**: Decodes GIF frames using the `gif` crate with parallel processing
-5. **ASCII conversion**: Converts each frame to ASCII art based on pixel brightness using parallel processing
-6. **Dimension calculation**: Intelligently calculates dimensions with proper character aspect ratio handling
-7. **Advanced output generation**: 
+5. **Character set selection**: Chooses appropriate character set (built-in, custom inline, or file-based)
+6. **ASCII conversion**: Converts each frame to ASCII art based on pixel brightness using parallel processing
+7. **Dimension calculation**: Intelligently calculates dimensions with proper character aspect ratio handling
+8. **Advanced output generation**: 
    - Terminal display and GIF output with color support
    - Text file output with frame separators
    - High-quality ASCII GIF generation with adaptive palettes
 
-The ASCII conversion process maps pixel brightness to appropriate ASCII characters, with either a simple or detailed character set. For colored output, it includes ANSI color codes for terminal display or renders characters with their original colors into a new GIF using advanced quantization techniques.
+The ASCII conversion process maps pixel brightness to appropriate ASCII characters using either built-in character sets (simple or detailed) or custom user-defined sets. For colored output, it includes ANSI color codes for terminal display or renders characters with their original colors into a new GIF using advanced quantization techniques.
 
 ### Advanced GIF Generation Process
 

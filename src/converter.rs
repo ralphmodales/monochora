@@ -18,7 +18,8 @@ pub struct AsciiConverterConfig {
     pub invert: bool,            
     pub detailed: bool,
     pub preserve_aspect_ratio: bool, 
-    pub scale_factor: Option<f32>,   
+    pub scale_factor: Option<f32>,
+    pub custom_charset: Option<Vec<char>>,
 }
 
 impl Default for AsciiConverterConfig {
@@ -31,6 +32,7 @@ impl Default for AsciiConverterConfig {
             detailed: true,
             preserve_aspect_ratio: true, 
             scale_factor: None,
+            custom_charset: None,
         }
     }
 }
@@ -59,7 +61,26 @@ impl AsciiConverterConfig {
             }
         }
         
+        if let Some(charset) = &self.custom_charset {
+            if charset.len() < 2 {
+                return Err(MonochoraError::Config("Custom character set must contain at least 2 characters".to_string()));
+            }
+            if charset.len() > 256 {
+                return Err(MonochoraError::Config("Custom character set cannot exceed 256 characters".to_string()));
+            }
+        }
+        
         Ok(())
+    }
+
+    fn get_charset(&self) -> &[char] {
+        if let Some(custom) = &self.custom_charset {
+            custom.as_slice()
+        } else if self.detailed {
+            DETAILED_CHARS
+        } else {
+            SIMPLE_CHARS
+        }
     }
 }
 
@@ -69,7 +90,7 @@ where
 {
     config.validate()?;
     
-    let chars = if config.detailed { DETAILED_CHARS } else { SIMPLE_CHARS };
+    let chars = config.get_charset();
     
     let (img_width, img_height) = image.dimensions();
     if img_width == 0 || img_height == 0 {
@@ -130,7 +151,7 @@ where
 {
     config.validate()?;
     
-    let chars = if config.detailed { DETAILED_CHARS } else { SIMPLE_CHARS };
+    let chars = config.get_charset();
     
     let (img_width, img_height) = image.dimensions();
     if img_width == 0 || img_height == 0 {
@@ -262,5 +283,3 @@ fn calculate_target_dimensions(
     
     Ok((target_width, target_height))
 }
-
-

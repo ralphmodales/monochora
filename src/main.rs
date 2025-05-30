@@ -68,6 +68,15 @@ struct Args {
 
     #[clap(long, default_value = "info", help = "Log level (error, warn, info, debug, trace)")]
     log_level: String,
+
+    #[clap(long, help = "Path to custom character set file")]
+    charset_file: Option<PathBuf>,
+
+    #[clap(long, help = "Inline character set string (ordered from darkest to lightest)")]
+    charset: Option<String>,
+
+    #[clap(long, default_value_t = false, help = "List available character sets and exit")]
+    list_charsets: bool,
 }
 
 fn validate_args(args: &Args) -> Result<(), MonochoraError> {
@@ -100,6 +109,7 @@ fn validate_args(args: &Args) -> Result<(), MonochoraError> {
     }
 
     validate_conflicting_options(args)?;
+    validate_charset_options(args)?;
 
     Ok(())
 }
@@ -143,6 +153,116 @@ fn validate_conflicting_options(args: &Args) -> Result<(), MonochoraError> {
     }
 
     Ok(())
+}
+
+fn validate_charset_options(args: &Args) -> Result<(), MonochoraError> {
+    if args.charset.is_some() && args.charset_file.is_some() {
+        return Err(MonochoraError::Config(
+            "Cannot use both --charset and --charset-file at the same time".to_string()
+        ));
+    }
+
+    let charset_options_count = [
+        args.simple,
+        args.charset.is_some(),
+        args.charset_file.is_some(),
+    ].iter().filter(|&&x| x).count();
+
+    if charset_options_count > 1 {
+        return Err(MonochoraError::Config(
+            "Cannot use multiple character set options simultaneously. Choose one: --simple, --charset, or --charset-file".to_string()
+        ));
+    }
+
+    if let Some(charset) = &args.charset {
+        validate_charset_string(charset)?;
+    }
+
+    Ok(())
+}
+
+fn validate_charset_string(charset: &str) -> Result<(), MonochoraError> {
+    let chars: Vec<char> = charset.chars().collect();
+    
+    if chars.len() < 2 {
+        return Err(MonochoraError::Config(
+            "Character set must contain at least 2 characters".to_string()
+        ));
+    }
+    
+    if chars.len() > 256 {
+        return Err(MonochoraError::Config(
+            "Character set cannot exceed 256 characters".to_string()
+        ));
+    }
+    
+    for &ch in &chars {
+        if ch.is_control() && ch != '\t' && ch != '\n' {
+            return Err(MonochoraError::Config(
+                format!("Character set contains invalid control character: {:?}", ch)
+            ));
+        }
+    }
+    
+    let unique_chars: std::collections::HashSet<_> = chars.iter().collect();
+    if unique_chars.len() != chars.len() {
+        return Err(MonochoraError::Config(
+            "Character set contains duplicate characters".to_string()
+        ));
+    }
+    
+    Ok(())
+}
+
+fn load_charset_from_file(path: &PathBuf) -> Result<String, MonochoraError> {
+    let content = std::fs::read_to_string(path)
+        .map_err(|e| MonochoraError::Config(format!("Failed to read charset file: {}", e)))?;
+    
+    let charset = content.trim().to_string();
+    validate_charset_string(&charset)?;
+    
+    Ok(charset)
+}
+
+fn list_available_charsets() {
+    println!("Available Character Sets:\n");
+    
+    println!("Built-in Sets:");
+    println!("  simple:   {}", " .:-=+*#%@");
+    println!("  detailed: {}", " .'`^\",:;Il!i><~+_-?][}{1)(|\\/tfjrxnuvczXYUJCLQ0OZmwqpdbkhao*#MW&8%B@");
+    
+    println!("\nExample Custom Sets:");
+    println!("  density:    \" .-+*#%@@\"");
+    println!("  minimal:    \" .oO@\"");
+    println!("  technical:  \" .-=+*#\"");
+    println!("  artistic:   \" ·∘○●◉\"");
+    println!("  japanese:   \"・〆ヲァィヵヶ\"");
+    println!("  blocks:     \" ░▒▓█\"");
+    
+    println!("\nUsage:");
+    println!("  --charset \" .oO@\"              # Inline character set");
+    println!("  --charset-file ./my-chars.txt  # Load from file");
+    println!("  --simple                       # Use simple built-in set");
+    println!("  (default)                      # Use detailed built-in set");
+    
+    println!("\nCharacter Set Rules:");
+    println!("  • Order from darkest to lightest");
+    println!("  • Minimum 2 characters, maximum 256");
+    println!("  • Must contain unique characters");
+    println!("  • No control characters (except tab/newline in files)");
+}
+
+fn get_custom_charset(args: &Args) -> Result<Option<Vec<char>>, MonochoraError> {
+    if let Some(charset_string) = &args.charset {
+        return Ok(Some(charset_string.chars().collect()));
+    }
+    
+    if let Some(charset_file) = &args.charset_file {
+        let charset_string = load_charset_from_file(charset_file)?;
+        return Ok(Some(charset_string.chars().collect()));
+    }
+    
+    Ok(None)
 }
 
 fn setup_logging(level: &str) -> Result<(), MonochoraError> {
@@ -392,6 +512,11 @@ async fn handle_terminal_display(
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
+    if args.list_charsets {
+        list_available_charsets();
+        return Ok(());
+    }
+
     if let Err(e) = setup_logging(&args.log_level) {
         eprintln!("Warning: Failed to setup logging: {}", e);
     }
@@ -434,6 +559,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let (ascii_width, ascii_height) = calculate_gif_dimensions(&args, gif_data.width, gif_data.height)?;
 
+    let custom_charset = get_custom_charset(&args)?;
+
     let config = AsciiConverterConfig {
         width: ascii_width,
         height: ascii_height,
@@ -442,7 +569,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         detailed: !args.simple,
         preserve_aspect_ratio: args.preserve_aspect,
         scale_factor: args.scale,
+        custom_charset,
     };
+
+    if !args.quiet && config.custom_charset.is_some() {
+        info!("Using custom character set with {} characters", 
+            config.custom_charset.as_ref().unwrap().len());
+    }
 
     let (ascii_frames, frame_delays) = process_ascii_conversion(&args, &gif_data, &config).await?;
 
