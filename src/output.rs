@@ -84,6 +84,76 @@ fn get_ansi_regex() -> &'static Regex {
     })
 }
 
+fn validate_font_charset_support(
+    ascii_frames: &[Vec<String>],
+    font: &Font,
+) -> Result<()> {
+    let mut unique_chars = std::collections::HashSet::new();
+    
+    for frame in ascii_frames {
+        for line in frame {
+            if line.contains('\x1b') {
+                let regex = get_ansi_regex();
+                let mut last_end = 0;
+                
+                for mat in regex.find_iter(line) {
+                    if mat.start() > last_end {
+                        let uncolored_text = &line[last_end..mat.start()];
+                        for ch in uncolored_text.chars() {
+                            if ch != '\x1b' && !ch.is_control() {
+                                unique_chars.insert(ch);
+                            }
+                        }
+                    }
+                    
+                    if let Some(captures) = regex.captures(&line[mat.start()..mat.end()]) {
+                        for ch in captures[4].chars() {
+                            if !ch.is_control() {
+                                unique_chars.insert(ch);
+                            }
+                        }
+                    }
+                    
+                    last_end = mat.end();
+                }
+                
+                if last_end < line.len() {
+                    let remaining = &line[last_end..];
+                    for ch in remaining.chars() {
+                        if ch != '\x1b' && ch != '\0' && !ch.is_control() {
+                            unique_chars.insert(ch);
+                        }
+                    }
+                }
+            } else {
+                for ch in line.chars() {
+                    if !ch.is_control() {
+                        unique_chars.insert(ch);
+                    }
+                }
+            }
+        }
+    }
+    
+    let mut unsupported_chars = Vec::new();
+    
+    for &ch in &unique_chars {
+        let glyph = font.glyph(ch);
+        if glyph.id().0 == 0 {
+            unsupported_chars.push(ch);
+        }
+    }
+    
+    if !unsupported_chars.is_empty() {
+        unsupported_chars.sort();
+        let unsupported_str: String = unsupported_chars.iter().collect();
+        return Err(MonochoraError::UnsupportedFontCharacters {
+            characters: unsupported_str
+        });    }
+    
+    Ok(())
+}
+
 fn parse_line_to_colored_characters(line: &str, default_color: Rgb<u8>) -> Vec<ColoredCharacter> {
     if !line.contains('\x1b') {
         return line.chars().map(|c| ColoredCharacter { 
@@ -552,6 +622,8 @@ pub fn ascii_frames_to_gif_with_dimensions<P: AsRef<Path>>(
         Font::try_from_bytes(font_data as &[u8])
             .ok_or_else(|| MonochoraError::FontLoad("Failed to load embedded font".to_string()))?
     );
+
+    validate_font_charset_support(ascii_frames, &font)?;
 
     let dimensions = calculate_dimensions_from_ascii(ascii_frames, options)?;
 

@@ -14,6 +14,9 @@ pub enum MonochoraError {
     #[error("Font loading error: {0}")]
     FontLoad(String),
 
+    #[error("Font does not support the following characters: {characters}")]
+    UnsupportedFontCharacters { characters: String },
+
     #[error("URL parsing error: {0}")]
     UrlParse(#[from] url::ParseError),
 
