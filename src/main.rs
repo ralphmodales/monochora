@@ -16,7 +16,7 @@ use tracing::{error, info, warn};
 #[repr(C)]
 struct Args {
     #[clap(short, long, help = "Input GIF file path or URL")]
-    input: String,
+    input: Option<String>,
 
     #[clap(short, long, help = "Output file path for text format")]
     output: Option<PathBuf>,
@@ -80,6 +80,10 @@ struct Args {
 }
 
 fn validate_args(args: &Args) -> Result<(), MonochoraError> {
+    if args.input.is_none() {
+        return Err(MonochoraError::Config("Input file path or URL is required".to_string()));
+    }
+
     if args.font_size <= 0.0 || args.font_size > 100.0 {
         return Err(MonochoraError::InvalidFontSize { size: args.font_size });
     }
@@ -427,7 +431,8 @@ async fn handle_gif_output(
     frame_delays: &[u16],
     gif_data: &monochora::handler::GifData,
 ) -> Result<(), MonochoraError> {
-    let output_path = generate_gif_output_path(&args.input, &args.gif_output);
+    let input = args.input.as_ref().unwrap();
+    let output_path = generate_gif_output_path(input, &args.gif_output);
     
     if !args.quiet {
         info!("Generating ASCII GIF animation: {}", output_path.display());
@@ -474,8 +479,9 @@ async fn handle_text_output(
     args: &Args,
     ascii_frames: &[Vec<String>],
 ) -> Result<(), MonochoraError> {
+    let input = args.input.as_ref().unwrap();
     let output_path = args.output.clone().unwrap_or_else(|| {
-        generate_default_output_path(&args.input)
+        generate_default_output_path(input)
     });
     
     if !args.quiet {
@@ -531,11 +537,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err(e.into());
     }
 
+    let input = args.input.as_ref().unwrap();
+
     if !args.quiet {
-        info!("Loading GIF: {}", args.input);
+        info!("Loading GIF: {}", input);
     }
     
-    let input_path = get_input_path(&args.input).await
+    let input_path = get_input_path(input).await
         .map_err(|e| {
             error!("Failed to get input path: {}", e);
             e
