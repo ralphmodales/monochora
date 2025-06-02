@@ -1,6 +1,6 @@
 [package]
 name = "monochora"
-version = "0.1.5"
+version = "0.1.6"
 edition = "2024"
 description = "gif to ascii art converter written in rust"
 license = "MIT"

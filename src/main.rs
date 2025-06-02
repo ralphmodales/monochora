@@ -77,6 +77,12 @@ struct Args {
 
     #[clap(long, default_value_t = false, help = "List available character sets and exit")]
     list_charsets: bool,
+
+    #[clap(long, help = "Speed multiplier for animation (e.g., 0.5 for half speed, 2.0 for double speed)")]
+    speed: Option<f32>,
+
+    #[clap(long, help = "Target frames per second (overrides speed setting)")]
+    fps: Option<f32>,
 }
 
 fn validate_args(args: &Args) -> Result<(), MonochoraError> {
@@ -110,6 +116,24 @@ fn validate_args(args: &Args) -> Result<(), MonochoraError> {
         if threads == 0 || threads > 1000 {
             return Err(MonochoraError::Config(format!("Invalid thread count: {}", threads)));
         }
+    }
+
+    if let Some(speed) = args.speed {
+        if speed <= 0.0 || speed > 100.0 {
+            return Err(MonochoraError::Config(format!("Invalid speed multiplier: {}", speed)));
+        }
+    }
+
+    if let Some(fps) = args.fps {
+        if fps <= 0.0 || fps > 1000.0 {
+            return Err(MonochoraError::Config(format!("Invalid FPS value: {}", fps)));
+        }
+    }
+
+    if args.speed.is_some() && args.fps.is_some() {
+        return Err(MonochoraError::Config(
+            "Cannot use both --speed and --fps at the same time".to_string()
+        ));
     }
 
     validate_conflicting_options(args)?;
@@ -389,6 +413,35 @@ fn generate_gif_output_path(input: &str, gif_output: &Option<Option<PathBuf>>) -
     }
 }
 
+fn calculate_adjusted_frame_delays(
+    original_delays: &[u16],
+    speed: Option<f32>,
+    fps: Option<f32>,
+    quiet: bool
+) -> Vec<u16> {
+    let adjusted_delays = if let Some(target_fps) = fps {
+        let target_delay_ms = (1000.0 / target_fps) as u16;
+        if !quiet {
+            info!("Setting consistent frame rate to {:.1} FPS ({} ms per frame)", target_fps, target_delay_ms);
+        }
+        vec![target_delay_ms; original_delays.len()]
+    } else if let Some(speed_mult) = speed {
+        if !quiet {
+            info!("Adjusting animation speed by {:.2}x", speed_mult);
+        }
+        original_delays.iter()
+            .map(|&delay| {
+                let adjusted = (delay as f32 / speed_mult) as u16;
+                adjusted.max(1)
+            })
+            .collect()
+    } else {
+        original_delays.to_vec()
+    };
+
+    adjusted_delays
+}
+
 async fn process_ascii_conversion(
     args: &Args,
     gif_data: &monochora::handler::GifData,
@@ -415,14 +468,21 @@ async fn process_ascii_conversion(
     let results: Result<Vec<(Vec<String>, u16)>, MonochoraError> = results.into_iter().collect();
     let results = results?;
     
-    let (ascii_frames, frame_delays): (Vec<_>, Vec<_>) = results.into_iter().unzip();
+    let (ascii_frames, original_delays): (Vec<_>, Vec<_>) = results.into_iter().unzip();
+    
+    let adjusted_delays = calculate_adjusted_frame_delays(
+        &original_delays,
+        args.speed,
+        args.fps,
+        args.quiet
+    );
     
     let conversion_time = start_time.elapsed();
     if !args.quiet {
         info!("ASCII conversion completed in {:.2}s", conversion_time.as_secs_f64());
     }
 
-    Ok((ascii_frames, frame_delays))
+    Ok((ascii_frames, adjusted_delays))
 }
 
 async fn handle_gif_output(
