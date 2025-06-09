@@ -1,15 +1,17 @@
 use clap::Parser;
 use monochora::{
     converter::{image_to_ascii, image_to_colored_ascii, AsciiConverterConfig},
-    display::{display_ascii_animation, get_terminal_size, save_ascii_to_file},
+    display::{display_ascii_animation, get_terminal_size, save_ascii_to_file, display_responsive_ascii_animation},
     handler::decode_gif,
     output::{ascii_frames_to_gif_with_dimensions, AsciiGifOutputOptions},
+    terminal_watcher::{TerminalWatcher, ResponsiveFrameManager, TerminalDimensions},
     web::get_input_path,
     MonochoraError,
 };
 use rayon::prelude::*;
 use std::path::PathBuf;
 use tracing::{error, info, warn};
+
 
 #[derive(Parser, Debug)]
 #[clap(author, version, about = "Convert GIF images to ASCII art animations")]
@@ -83,6 +85,12 @@ struct Args {
 
     #[clap(long, help = "Target frames per second (overrides speed setting)")]
     fps: Option<f32>,
+
+    #[clap(long, default_value_t = false, help = "Enable responsive mode - auto-adjust when terminal is resized")]
+    responsive: bool,
+
+    #[clap(long, default_value_t = false, help = "Watch terminal for resize events (requires responsive mode)")]
+    watch_terminal: bool,
 }
 
 fn validate_args(args: &Args) -> Result<(), MonochoraError> {
@@ -133,6 +141,18 @@ fn validate_args(args: &Args) -> Result<(), MonochoraError> {
     if args.speed.is_some() && args.fps.is_some() {
         return Err(MonochoraError::Config(
             "Cannot use both --speed and --fps at the same time".to_string()
+        ));
+    }
+
+    if args.watch_terminal && !args.responsive {
+        return Err(MonochoraError::Config(
+            "Terminal watching (--watch-terminal) requires responsive mode (--responsive)".to_string()
+        ));
+    }
+
+    if args.responsive && (args.gif_output.is_some() || args.save || args.output.is_some()) {
+        return Err(MonochoraError::Config(
+            "Responsive mode cannot be used with file output options".to_string()
         ));
     }
 
@@ -574,6 +594,34 @@ async fn handle_terminal_display(
     display_ascii_animation(ascii_frames, frame_delays, loop_count, true).await
 }
 
+async fn handle_responsive_terminal_display(
+    args: &Args,
+    _initial_frames: &[Vec<String>],
+    frame_delays: &[u16],
+    gif_data: &monochora::handler::GifData,
+    config: &AsciiConverterConfig,
+) -> Result<(), MonochoraError> {
+    let initial_dims = TerminalDimensions::current()?;
+    let mut frame_manager = ResponsiveFrameManager::new(
+        gif_data.clone(),
+        config.clone(),
+        frame_delays.to_vec(),
+        initial_dims,
+        args.colored,
+    );
+
+    if args.watch_terminal {
+        let mut watcher = TerminalWatcher::new()?;
+        watcher.start_watching()?;
+        let resize_rx = watcher.get_receiver();
+        
+        display_responsive_ascii_animation(&mut frame_manager, resize_rx, gif_data.loop_count).await
+    } else {
+        let frames = frame_manager.get_frames()?;
+        display_ascii_animation(frames, frame_delays, gif_data.loop_count, true).await
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
@@ -652,7 +700,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else if args.save || args.output.is_some() {
         handle_text_output(&args, &ascii_frames).await?;
     } else {
-        handle_terminal_display(&args, &ascii_frames, &frame_delays, gif_data.loop_count).await?;
+        if args.responsive {
+            handle_responsive_terminal_display(&args, &ascii_frames, &frame_delays, &gif_data, &config).await?;
+        } else {
+            handle_terminal_display(&args, &ascii_frames, &frame_delays, gif_data.loop_count).await?;
+        }
     }
 
     Ok(())

@@ -11,6 +11,7 @@ static DETAILED_CHARS: &[char] = &[
 ];
 
 #[repr(C)]
+#[derive(Clone)]
 pub struct AsciiConverterConfig {
     pub width: Option<u32>,        
     pub height: Option<u32>,       

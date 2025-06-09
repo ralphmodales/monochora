@@ -10,6 +10,8 @@ use std::io::{self, Write};
 use std::time::Duration;
 use tokio::time::sleep;
 use tracing::{debug, warn};
+use crate::terminal_watcher::{ResponsiveFrameManager, TerminalDimensions};
+use tokio::sync::watch;
 
 pub fn get_terminal_size() -> Result<(u32, u32)> {
     let (cols, rows) = size()
@@ -55,6 +57,55 @@ fn validate_animation_input(
         }
     }
     
+    Ok(())
+}
+
+pub async fn display_responsive_ascii_animation(
+    frame_manager: &mut ResponsiveFrameManager,
+    mut resize_rx: watch::Receiver<TerminalDimensions>,
+    loop_count: u16,
+) -> Result<()> {
+    let mut stdout = io::stdout();
+    execute!(stdout, Hide)?;
+
+    let iterations = if loop_count == 0 { usize::MAX } else { loop_count as usize };
+    let mut current_iteration = 0;
+
+    'outer: while current_iteration < iterations {
+        let frames = frame_manager.get_frames()?.to_vec(); 
+        let delays = frame_manager.get_frame_delays().to_vec(); 
+
+        for (frame_idx, frame) in frames.iter().enumerate() {
+            tokio::select! {
+                _ = resize_rx.changed() => {
+                    let new_dims = *resize_rx.borrow();
+                    if frame_manager.update_dimensions(new_dims) {
+                        continue 'outer;
+                    }
+                }
+                _ = sleep(Duration::from_millis(delays[frame_idx] as u64)) => {
+                    execute!(stdout, Clear(ClearType::All), MoveTo(0, 0))?;
+                    
+                    for line in frame {
+                        writeln!(stdout, "{}", line)?;
+                    }
+                    stdout.flush()?;
+
+                    if poll(Duration::from_millis(0))? {
+                        if let Ok(Event::Key(key)) = read() {
+                            match key.code {
+                                KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('Q') => break 'outer,
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        current_iteration += 1;
+    }
+
+    execute!(stdout, Show, Clear(ClearType::All), MoveTo(0, 0))?;
     Ok(())
 }
 

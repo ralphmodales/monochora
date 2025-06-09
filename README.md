@@ -170,6 +170,8 @@ Options:
       --charset <CHARSET>                Custom character set string (ordered darkest to lightest)
       --charset-file <CHARSET_FILE>      Path to custom character set file
       --list-charsets                    List available character sets and exit
+      --responsive                       Enable responsive mode - auto-adjust when terminal is resized
+      --watch-terminal                   Watch terminal for resize events (requires responsive mode)
   -q, --quiet                            Suppress progress output
       --log-level <LOG_LEVEL>            Log level (error, warn, info, debug, trace) [default: info]
   -h, --help                             Print help
@@ -227,6 +229,42 @@ monochora -i long_animation.gif --speed 8.0 --simple
 
 # Combine with other features for optimal viewing
 monochora -i "https://example.com/animation.gif" --speed 1.5 -c -w 120 --charset " ·∘○●"
+```
+
+## Responsive Terminal Display
+
+Monochora can adapt to terminal size changes during playback for optimal viewing:
+
+### Responsive Mode (`--responsive`)
+
+Enables automatic adjustment of ASCII art dimensions when terminal size changes:
+
+- **Behavior**: Recalculates ASCII conversion when terminal is resized
+- **Use case**: Manually resize terminal during playback for better viewing
+- **Restriction**: Only works with terminal display mode (not file output)
+
+### Terminal Watching (`--watch-terminal`)
+
+Actively monitors terminal for resize events in real-time:
+
+- **Requirement**: Must be used with `--responsive` mode
+- **Behavior**: Continuously watches for terminal resize events
+- **Performance**: Minimal overhead for real-time monitoring
+
+### Responsive Examples
+
+```bash
+# Basic responsive mode - adapts when terminal is manually resized
+monochora -i animation.gif --responsive -c
+
+# Active terminal monitoring with speed control
+monochora -i animation.gif --responsive --watch-terminal --speed 0.8
+
+# Responsive colored output with custom character set
+monochora -i animation.gif --responsive --watch-terminal -c --charset " ·∘○●"
+
+# Responsive mode with FPS control
+monochora -i animation.gif --responsive --fps 30 --fit-terminal
 ```
 
 ## Character Sets
@@ -319,6 +357,13 @@ Speed control options are mutually exclusive:
 - **Target FPS**: `--fps <frame_rate>` (1-120)
 
 **You cannot use both `--speed` and `--fps` in the same command.**
+
+### Responsive Mode Restrictions
+
+- `--responsive` only works with terminal display mode
+- Cannot be used with file output options (`--save`, `--output`, `--gif-output`)
+- `--watch-terminal` requires `--responsive` mode to be enabled
+- Responsive features are not available during file generation
 
 ### Background Color Options
 
