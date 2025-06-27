@@ -13,6 +13,7 @@ Monochora is a GIF to ASCII art converter written in Rust. It can transform GIF 
 - Support for colored ASCII art (with ANSI color codes)
 - **Customizable character sets** - Built-in sets, inline strings, or custom files
 - Multiple output options (terminal, text file, or GIF output)
+- Advanced dithering algorithms - Multiple error diffusion algorithms for enhanced ASCII art quality
 - **Advanced GIF output features**:
   - Adaptive color palettes for better quality
   - Font size optimization for different scales
@@ -75,6 +76,10 @@ monochora -i input.gif --speed 2.0
 # Set target frames per second
 monochora -i input.gif --fps 30
 
+
+# Save as ASCII text file with dithering
+monochora -i input.gif -s --dither atkinson
+
 # Save as ASCII text file
 monochora -i input.gif -s
 
@@ -101,6 +106,12 @@ monochora -i input.gif --charset-file ./my-chars.txt
 
 # List available character sets
 monochora --list-charsets
+
+# List available dithering algorithms
+monochora --list-dithering
+
+# Save as high-quality ASCII GIF animation with speed adjustment and dithering
+monochora -i input.gif --gif-output output.gif --speed 0.8 --dither stucki
 
 # Save as high-quality ASCII GIF animation with speed adjustment
 monochora -i input.gif --gif-output output.gif --speed 0.8
@@ -170,6 +181,8 @@ Options:
       --charset <CHARSET>                Custom character set string (ordered darkest to lightest)
       --charset-file <CHARSET_FILE>      Path to custom character set file
       --list-charsets                    List available character sets and exit
+      --list-dithering                   List available dithering algorithms and exit
+      --dither <DITHER>                  Dithering algorithm (none, floyd-steinberg, atkinson, jarvis, stucki, burkes, sierra, two-row-sierra, sierra-lite)
       --responsive                       Enable responsive mode - auto-adjust when terminal is resized
       --watch-terminal                   Watch terminal for resize events (requires responsive mode)
   -q, --quiet                            Suppress progress output
@@ -177,6 +190,52 @@ Options:
   -h, --help                             Print help
   -V, --version                          Print version
 ```
+
+## Dithering Algorithms
+
+Monochora supports multiple dithering algorithms to improve the quality of ASCII art by reducing visual artifacts and enhancing detail preservation. Dithering spreads quantization errors across neighboring pixels, resulting in smoother gradients and better visual fidelity.
+
+### Available Dithering Algorithms
+
+- none: No dithering (fastest, default)
+- floyd-steinberg: Classic Floyd-Steinberg error diffusion, good general-purpose dithering
+- atkinson: Reduces color bleeding, ideal for high-contrast images
+- jarvis: Jarvis-Judice-Ninke algorithm, produces smoothest gradients (more computational)
+- stucki: Similar to Jarvis but with different error distribution for sharper details
+- burkes: Balanced error diffusion, good for medium-complexity images
+- sierra: Full Sierra dithering, high quality with moderate computation
+- two-row-sierra: Simplified Sierra (2 rows), faster with good quality
+- sierra-lite: Minimal Sierra dithering, fast with decent quality
+
+### Dithering Usage Examples
+
+```bash
+# Use Floyd-Steinberg dithering for general-purpose quality
+monochora -i input.gif --dither floyd-steinberg
+
+# Atkinson dithering for high-contrast images
+monochora -i high_contrast.gif --dither atkinson -c
+
+# Jarvis dithering for smooth gradients in detailed images
+monochora -i landscape.gif --dither jarvis --gif-output output.gif
+
+# Sierra-Lite for fast processing with decent quality
+monochora -i animation.gif --dither sierra-lite --speed 1.5
+
+# List all available dithering algorithms
+monochora --list-dithering
+```
+
+### Dithering Notes
+
+- **Performance**: Dithering algorithms (except none) use sequential processing, which may be slower than non-dithered parallel processing.
+- **Quality**: Algorithms like jarvis and sierra provide higher quality but require more computation.
+- **Use Cases**:
+floyd-steinberg: Best for most images, balances quality and speed.
+atkinson: Ideal for high-contrast images like text or logos.
+jarvis/stucki: Best for detailed images with smooth gradients.
+sierra-lite: Good for quick previews with acceptable quality.
+- **Colored Output**: Dithering works with both monochrome and colored ASCII output.
 
 ## Speed Control
 
@@ -633,12 +692,17 @@ Monochora includes comprehensive input validation:
 - No control characters (except tab/newline in files)
 - Proper UTF-8 encoding for Unicode characters
 
+### Dithering Validation
+- Must specify a valid dithering algorithm (use --list-dithering for options)
+- Invalid algorithm names result in a configuration error
+
 ### Conflict Detection
 - Prevents combining incompatible output modes
 - Validates color scheme combinations
 - Ensures options are used with appropriate output types
 - Prevents conflicting character set options
 - Prevents conflicting speed control options
+- Validates dithering algorithm compatibility with output modes
 
 ### Common Error Messages
 - **Invalid font size**: Font size out of valid range
@@ -647,6 +711,7 @@ Monochora includes comprehensive input validation:
 - **Invalid FPS**: Target FPS out of valid range (1-120)
 - **Speed conflict**: Cannot use both --speed and --fps options
 - **Invalid character set**: Character set validation failed
+- **Invalid dithering algorithm**: Unknown or unsupport dithering algorithm
 - **Config error**: Conflicting or invalid option combinations
 - **Thread pool error**: Issues with parallel processing setup
 
@@ -706,7 +771,7 @@ Monochora can also be used as a library in your Rust projects:
 
 ```rust
 use monochora::{
-    converter::{image_to_ascii, AsciiConverterConfig},
+    converter::{image_to_ascii, image_to_ascii_with_dithering, AsciiConverterConfig, DitheringAlgorithm},
     handler::decode_gif,
     display::display_ascii_animation,
     output::{ascii_frames_to_gif_with_dimensions, AsciiGifOutputOptions},
@@ -827,6 +892,16 @@ The speed control system handles frame timing adjustments:
 4. **Conflict resolution**: Prevents simultaneous use of both speed control methods
 5. **Timing preservation**: Maintains smooth playback across different output formats
 
+### Dithering Processing
+
+Dithering enhances ASCII art quality by distributing quantization errors:
+
+1. **Algorithm selection**: Supports multiple algorithms (Floyd-Steinberg, Atkinson, Jarvis, etc.)
+2. **Error diffusion**: Spreads brightness errors to neighboring pixels based on algorithm-specific kernels
+3. **Sequential processing**: Ensures accurate error propagation (disables parallel processing)
+4. **Compatibility**: Works with both monochrome and colored ASCII output
+5. **Performance trade-off**: Higher quality at the cost of increased processing time
+
 ### Advanced GIF Generation Process
 
 The ASCII GIF output uses several optimization techniques:
@@ -834,7 +909,7 @@ The ASCII GIF output uses several optimization techniques:
 1. **Adaptive palette creation** based on font size and color scheme
 2. **Precision quantization** with different algorithms for different font sizes
 3. **Smart color distance calculation** optimized for text rendering
-4. **Frame-by-frame parallel rendering** for improved performance
+4. **Frame-by-frame parallel rendering** for improved performance (non-dithered mode)
 5. **Embedded font rendering** using DejaVu Sans Mono for consistent output
 6. **Speed-aware timing** that preserves smooth playback at different speeds
 
@@ -845,12 +920,13 @@ The ASCII GIF output uses several optimization techniques:
 - **Scalable**: Performance improves with more CPU cores
 - **Optimized algorithms**: Different processing strategies based on output type and quality settings
 - **Efficient speed calculations**: Minimal overhead for frame timing adjustments
+- **Dithering performance**: Sequential processing for dithering may increase processing time for higher quality
 
 ### Typical Performance
 
 - **Small GIFs** (< 1MB): Near-instantaneous processing with speed control
 - **Medium GIFs** (1-10MB): 1-5 seconds on modern hardware, timing adjustments add <1% overhead
-- **Large GIFs** (10MB+): Scales linearly with thread count, speed control remains efficient
+- **Large GIFs** (10MB+): Scales linearly with thread count, speed control remains efficient, dithering scales with image complexity
 - **Batch processing**: Quiet mode minimizes I/O overhead, speed adjustments are computed once
 
 ## Dependencies

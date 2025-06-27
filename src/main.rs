@@ -1,6 +1,7 @@
 use clap::Parser;
 use monochora::{
-    converter::{image_to_ascii, image_to_colored_ascii, AsciiConverterConfig},
+    converter::{image_to_ascii, image_to_colored_ascii, AsciiConverterConfig, image_to_ascii_with_dithering, image_to_colored_ascii_with_dithering,
+        DitheringAlgorithm, list_dithering_algorithms},
     display::{display_ascii_animation, get_terminal_size, save_ascii_to_file, display_responsive_ascii_animation},
     handler::decode_gif,
     output::{ascii_frames_to_gif_with_dimensions, AsciiGifOutputOptions},
@@ -91,6 +92,23 @@ struct Args {
 
     #[clap(long, default_value_t = false, help = "Watch terminal for resize events (requires responsive mode)")]
     watch_terminal: bool,
+
+    #[clap(long, help = "Dithering algorithm (none, floyd-steinberg, atkinson, jarvis, stucki, burkes, sierra, two-row-sierra, sierra-lite)")]
+    dither: Option<String>,
+
+    #[clap(long, default_value_t = false, help = "List available dithering algorithms and exit")]
+    list_dithering: bool,
+}
+
+fn validate_dithering_args(args: &Args) -> Result<(), MonochoraError> {
+    if let Some(dither_str) = &args.dither {
+        match dither_str.parse::<DitheringAlgorithm>() {
+            Ok(_) => Ok(()),
+            Err(e) => Err(MonochoraError::Config(format!("Invalid dithering algorithm: {}", e))),
+        }
+    } else {
+        Ok(())
+    }
 }
 
 fn validate_args(args: &Args) -> Result<(), MonochoraError> {
@@ -158,6 +176,7 @@ fn validate_args(args: &Args) -> Result<(), MonochoraError> {
 
     validate_conflicting_options(args)?;
     validate_charset_options(args)?;
+    validate_dithering_args(args)?;
 
     Ok(())
 }
@@ -469,21 +488,44 @@ async fn process_ascii_conversion(
 ) -> Result<(Vec<Vec<String>>, Vec<u16>), MonochoraError> {
     if !args.quiet {
         info!("Converting {} frames to ASCII...", gif_data.frames.len());
+        if let Some(dithering) = config.dithering_algorithm {
+            if dithering != DitheringAlgorithm::None {
+                info!("Using {:?} dithering (this may take longer due to sequential processing)", dithering);
+            }
+        }
     }
     
     let start_time = std::time::Instant::now();
-    
-    let results: Vec<Result<(Vec<String>, u16), MonochoraError>> = gif_data.frames
-        .par_iter()
-        .map(|frame| {
-            let ascii_frame = if args.colored {
-                image_to_colored_ascii(&frame.image, config)
-            } else {
-                image_to_ascii(&frame.image, config)
-            };
-            ascii_frame.map(|ascii| (ascii, frame.delay_time_ms))
-        })
-        .collect();
+   
+     let use_dithering = config.dithering_algorithm
+        .map(|d| d != DitheringAlgorithm::None)
+        .unwrap_or(false);
+
+    let results: Vec<Result<(Vec<String>, u16), MonochoraError>> = if use_dithering {
+        gif_data.frames
+            .iter()
+            .map(|frame| {
+                let ascii_frame = if args.colored {
+                    image_to_colored_ascii_with_dithering(&frame.image, config)
+                } else {
+                    image_to_ascii_with_dithering(&frame.image, config)
+                };
+                ascii_frame.map(|ascii| (ascii, frame.delay_time_ms))
+            })
+            .collect()
+    } else {
+        gif_data.frames
+            .par_iter()
+            .map(|frame| {
+                let ascii_frame = if args.colored {
+                    image_to_colored_ascii(&frame.image, config)
+                } else {
+                    image_to_ascii(&frame.image, config)
+                };
+                ascii_frame.map(|ascii| (ascii, frame.delay_time_ms))
+            })
+            .collect()
+    };
     
     let results: Result<Vec<(Vec<String>, u16)>, MonochoraError> = results.into_iter().collect();
     let results = results?;
@@ -622,12 +664,27 @@ async fn handle_responsive_terminal_display(
     }
 }
 
+fn get_dithering_algorithm(args: &Args) -> Result<Option<DitheringAlgorithm>, MonochoraError> {
+    if let Some(dither_str) = &args.dither {
+        let algorithm = dither_str.parse::<DitheringAlgorithm>()
+            .map_err(|e| MonochoraError::Config(format!("Invalid dithering algorithm: {}", e)))?;
+        Ok(Some(algorithm))
+    } else {
+        Ok(None)
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
     if args.list_charsets {
         list_available_charsets();
+        return Ok(());
+    }
+
+    if args.list_dithering {
+        list_dithering_algorithms();
         return Ok(());
     }
 
@@ -676,6 +733,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (ascii_width, ascii_height) = calculate_gif_dimensions(&args, gif_data.width, gif_data.height)?;
 
     let custom_charset = get_custom_charset(&args)?;
+    let dithering_algorithm = get_dithering_algorithm(&args)?;
 
     let config = AsciiConverterConfig {
         width: ascii_width,
@@ -686,12 +744,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         preserve_aspect_ratio: args.preserve_aspect,
         scale_factor: args.scale,
         custom_charset,
+        dithering_algorithm,
     };
 
-    if !args.quiet && config.custom_charset.is_some() {
-        info!("Using custom character set with {} characters", 
-            config.custom_charset.as_ref().unwrap().len());
+    if !args.quiet {
+        if let Some(dithering) = config.dithering_algorithm {
+            info!("Using dithering algorithm: {:?}", dithering);
+        }
+        if config.custom_charset.is_some() {
+            info!("Using custom character set with {} characters", 
+                config.custom_charset.as_ref().unwrap().len());
+        }
     }
+
 
     let (ascii_frames, frame_delays) = process_ascii_conversion(&args, &gif_data, &config).await?;
 
