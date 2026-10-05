@@ -1,5 +1,5 @@
 use crate::{MonochoraError, Result};
-use crate::converter::{image_to_ascii, image_to_colored_ascii, AsciiConverterConfig};
+use crate::converter::{fit_dimensions, image_to_ascii, image_to_colored_ascii, AsciiConverterConfig};
 use crate::handler::GifData;
 use crossterm::terminal::size;
 use std::sync::mpsc::{self, Sender};
@@ -116,13 +116,17 @@ impl Drop for TerminalWatcher {
 pub fn responsive_config(
     config_template: &AsciiConverterConfig,
     dimensions: TerminalDimensions,
+    img_width: u32,
+    img_height: u32,
 ) -> Result<AsciiConverterConfig> {
-    let target_width = dimensions.width.saturating_sub(2);
-    let target_height = dimensions.height.saturating_sub(4);
+    let max_width = dimensions.width.saturating_sub(2);
+    let max_height = dimensions.height.saturating_sub(4);
 
-    if target_width == 0 || target_height == 0 {
+    if max_width == 0 || max_height == 0 {
         return Err(MonochoraError::Terminal("Terminal too small for display".to_string()));
     }
+
+    let (target_width, target_height) = fit_dimensions(img_width, img_height, max_width, max_height, config_template);
 
     let mut config = config_template.clone();
     config.width = Some(target_width);
@@ -180,7 +184,12 @@ impl ResponsiveFrameManager {
     }
 
     fn regenerate_frames(&mut self) -> Result<()> {
-        let config = responsive_config(&self.config_template, self.current_dimensions)?;
+        let config = responsive_config(
+            &self.config_template,
+            self.current_dimensions,
+            self.gif_data.width,
+            self.gif_data.height,
+        )?;
 
         let new_frames: Result<Vec<Vec<String>>> = self.gif_data.frames
             .iter()

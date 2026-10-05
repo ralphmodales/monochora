@@ -7,7 +7,7 @@ pub mod web;
 pub mod error;
 
 pub use converter::{image_to_ascii, image_to_colored_ascii, AsciiConverterConfig, image_to_ascii_with_dithering, image_to_colored_ascii_with_dithering,
-        DitheringAlgorithm, list_dithering_algorithms};
+        DitheringAlgorithm, list_dithering_algorithms, fit_dimensions};
 pub use display::{display_ascii_animation, get_terminal_size, save_ascii_to_file, display_responsive_ascii_animation};
 pub use handler::{decode_gif, GifData, GifFrame, GifFrameReader};
 pub use output::{ascii_frames_to_gif, ascii_frames_to_gif_with_dimensions, AsciiGifOutputOptions};

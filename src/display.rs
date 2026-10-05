@@ -2,7 +2,7 @@ use crate::{MonochoraError, Result};
 use crossterm::{
     cursor::{Hide, MoveTo, Show},
     execute, queue,
-    terminal::{Clear, ClearType, size},
+    terminal::{BeginSynchronizedUpdate, Clear, ClearType, EndSynchronizedUpdate, size},
     event::{poll, read, Event, KeyCode},
 };
 use std::io::{self, BufWriter, Write};
@@ -63,7 +63,7 @@ fn validate_animation_input(
 
 fn render_frame<W: Write>(out: &mut W, buffer: &mut Vec<u8>, frame: &[String]) -> io::Result<()> {
     buffer.clear();
-    queue!(buffer, MoveTo(0, 0))?;
+    queue!(buffer, BeginSynchronizedUpdate, MoveTo(0, 0))?;
     
     for line in frame {
         queue!(buffer, Clear(ClearType::CurrentLine))?;
@@ -71,7 +71,7 @@ fn render_frame<W: Write>(out: &mut W, buffer: &mut Vec<u8>, frame: &[String]) -
         buffer.push(b'\n');
     }
     
-    queue!(buffer, Clear(ClearType::FromCursorDown))?;
+    queue!(buffer, Clear(ClearType::FromCursorDown), EndSynchronizedUpdate)?;
     out.write_all(buffer)?;
     out.flush()
 }

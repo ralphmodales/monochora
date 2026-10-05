@@ -656,7 +656,7 @@ fn calculate_target_dimensions(
         }
         
         let scaled_width = (img_width as f32 * scale).max(1.0) as u32;
-        let scaled_height = (img_height as f32 * scale / config.char_aspect).max(1.0) as u32;
+        let scaled_height = (img_height as f32 * scale * config.char_aspect).max(1.0) as u32;
         return Ok((scaled_width, scaled_height));
     }
     
@@ -673,10 +673,10 @@ fn calculate_target_dimensions(
         }
         
         let height = if config.preserve_aspect_ratio {
-            let calculated_height = (width as f32 * img_height as f32 / img_width as f32 / config.char_aspect).max(1.0) as u32;
+            let calculated_height = (width as f32 * img_height as f32 / img_width as f32 * config.char_aspect).max(1.0) as u32;
             calculated_height
         } else {
-            (img_height as f32 / config.char_aspect).max(1.0) as u32
+            (img_height as f32 * config.char_aspect).max(1.0) as u32
         };
         return Ok((width, height));
     }
@@ -687,7 +687,7 @@ fn calculate_target_dimensions(
         }
         
         let width = if config.preserve_aspect_ratio {
-            let calculated_width = (height as f32 * img_width as f32 / img_height as f32 * config.char_aspect).max(1.0) as u32;
+            let calculated_width = (height as f32 * img_width as f32 / img_height as f32 / config.char_aspect).max(1.0) as u32;
             calculated_width
         } else {
             img_width
@@ -697,10 +697,33 @@ fn calculate_target_dimensions(
     
     let target_width = img_width;
     let target_height = if config.preserve_aspect_ratio {
-        (img_height as f32 / config.char_aspect).max(1.0) as u32
+        (img_height as f32 * config.char_aspect).max(1.0) as u32
     } else {
         img_height
     };
     
     Ok((target_width, target_height))
+}
+
+pub fn fit_dimensions(
+    img_width: u32,
+    img_height: u32,
+    max_width: u32,
+    max_height: u32,
+    config: &AsciiConverterConfig,
+) -> (u32, u32) {
+    let max_width = max_width.max(1);
+    let max_height = max_height.max(1);
+    
+    if !config.preserve_aspect_ratio || img_width == 0 || img_height == 0 || config.char_aspect <= 0.0 {
+        return (max_width, max_height);
+    }
+    
+    let height_at_max_width = max_width as f32 * img_height as f32 / img_width as f32 * config.char_aspect;
+    if height_at_max_width <= max_height as f32 {
+        return (max_width, (height_at_max_width as u32).max(1));
+    }
+    
+    let width_at_max_height = (max_height as f32 * img_width as f32 / img_height as f32 / config.char_aspect) as u32;
+    (width_at_max_height.clamp(1, max_width), max_height)
 }

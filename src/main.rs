@@ -1,7 +1,7 @@
 use clap::Parser;
 use monochora::{
     converter::{AsciiConverterConfig, image_to_ascii_with_dithering, image_to_colored_ascii_with_dithering,
-        DitheringAlgorithm, list_dithering_algorithms},
+        DitheringAlgorithm, list_dithering_algorithms, fit_dimensions},
     display::{display_ascii_animation, get_terminal_size, save_ascii_to_file, display_responsive_ascii_animation},
     handler::{decode_gif, GifFrame, GifFrameReader},
     output::{ascii_frames_to_gif_with_dimensions, AsciiGifOutputOptions},
@@ -391,19 +391,26 @@ fn calculate_gif_dimensions(
         
         Ok((Some(chars_width), Some(chars_height)))
     } else {
-        let terminal_width = if args.fit_terminal && args.gif_output.is_none() && !args.save {
-            match get_terminal_size() {
-                Ok((w, _)) => Some(w),
-                Err(e) => {
-                    warn!("Failed to get terminal size: {}", e);
-                    None
-                }
+        Ok((args.width, args.height))
+    }
+}
+
+fn terminal_fit_area(args: &Args) -> Option<(u32, u32)> {
+    let terminal_playback = args.gif_output.is_none() && !args.save && args.output.is_none() && !args.responsive;
+    let explicit_size = args.width.is_some() || args.height.is_some() || args.scale.is_some();
+
+    if !terminal_playback || explicit_size {
+        return None;
+    }
+
+    match get_terminal_size() {
+        Ok((cols, rows)) => Some((cols, rows.saturating_sub(1))),
+        Err(e) => {
+            if args.fit_terminal {
+                warn!("Failed to get terminal size: {}", e);
             }
-        } else {
             None
-        };
-        
-        Ok((args.width.or(terminal_width), args.height))
+        }
     }
 }
 
@@ -741,7 +748,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let custom_charset = get_custom_charset(&args)?;
     let dithering_algorithm = get_dithering_algorithm(&args)?;
 
-    let config = AsciiConverterConfig {
+    let mut config = AsciiConverterConfig {
         width: ascii_width,
         height: ascii_height,
         char_aspect: 0.5, 
@@ -752,6 +759,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         custom_charset,
         dithering_algorithm,
     };
+
+    if let Some((max_width, max_height)) = terminal_fit_area(&args) {
+        let (fit_width, fit_height) = fit_dimensions(gif_width, gif_height, max_width, max_height, &config);
+        config.width = Some(fit_width);
+        config.height = Some(fit_height);
+    }
 
     if !args.quiet {
         if let Some(dithering) = config.dithering_algorithm {
@@ -770,7 +783,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let config = if args.responsive {
-        responsive_config(&config, TerminalDimensions::current()?)?
+        responsive_config(&config, TerminalDimensions::current()?, gif_width, gif_height)?
     } else {
         config
     };
