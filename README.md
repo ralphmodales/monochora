@@ -15,6 +15,7 @@ Monochora is a GIF and image to ASCII art converter written in Rust. It can tran
 - Save animations as text files or high-quality ASCII GIF files
 - Support for colored ASCII art (with ANSI color codes)
 - **Half-block mode** - Two pixels per character cell for sharp, image-like terminal output
+- **Braille mode** - 2x4 dots per character cell for the highest detail, great with dithering
 - **Customizable character sets** - Built-in sets, inline strings, or custom files
 - Multiple output options (terminal, text file, or GIF output)
 - Advanced dithering algorithms - Multiple error diffusion algorithms for enhanced ASCII art quality
@@ -101,6 +102,9 @@ monochora -i input.gif -c
 
 # Half-block mode - two pixels per character cell, full color
 monochora -i input.gif --blocks -c
+
+# Braille mode - 2x4 dots per character cell, best with dithering
+monochora -i input.gif --braille --dither floyd-steinberg
 
 # Download from URL and generate colored ASCII with speed control
 monochora -i "https://giffiles.alphacoders.com/220/220890.gif" -c -w 200 -H 100 --speed 1.5
@@ -197,6 +201,7 @@ Options:
       --list-dithering                   List available dithering algorithms and exit
       --dither <DITHER>                  Dithering algorithm (none, floyd-steinberg, atkinson, jarvis, stucki, burkes, sierra, two-row-sierra, sierra-lite)
       --blocks                           Render with half-block characters (two pixels per character cell)
+      --braille                          Render with braille characters (2x4 dots per character cell)
       --responsive                       Enable responsive mode - auto-adjust when terminal is resized
       --watch-terminal                   Watch terminal for resize events (requires responsive mode)
   -q, --quiet                            Suppress progress output
@@ -296,6 +301,35 @@ monochora -i animation.gif --blocks -c --responsive --watch-terminal
 
 # Save half-block frames to a text file
 monochora -i animation.gif --blocks -c -o ./blocks.txt
+```
+
+## Braille Mode
+
+Braille mode (`--braille`) draws each character cell as a braille character with a 2x4 grid of dots, giving 8 dots of detail per cell. A dot is lit where the image is bright.
+
+- **Dithering**: Works with `--dither`, which spreads brightness across the dots and makes gradients and photos look much better. Without `--dither`, a dot is lit above 50% brightness
+- **With `-c`**: Each cell takes the average color of its lit dots
+- **`--invert`**: Lights the dots where the image is dark instead
+- **Transparency**: Transparent pixels leave their dots off
+- **Terminal support**: Needs a font with braille characters (most terminals fall back to one automatically)
+
+### Braille Examples
+
+```bash
+# Black and white braille with Floyd-Steinberg dithering
+monochora -i animation.gif --braille --dither floyd-steinberg
+
+# Colored braille
+monochora -i animation.gif --braille -c --dither atkinson
+
+# Braille for dark-on-light images
+monochora -i sketch.png --braille --invert --dither floyd-steinberg
+
+# Responsive braille playback that follows terminal resizes
+monochora -i animation.gif --braille -c --responsive --watch-terminal
+
+# Save braille frames to a text file
+monochora -i animation.gif --braille --dither jarvis -o ./braille.txt
 ```
 
 ## Speed Control
@@ -484,6 +518,12 @@ Speed control options are mutually exclusive:
 - Cannot be used with file output options (`--save`, `--output`, `--gif-output`)
 - `--watch-terminal` requires `--responsive` mode to be enabled
 - Responsive features are not available during file generation
+
+### Braille Mode Restrictions
+
+- `--braille` cannot be combined with `--blocks`
+- `--braille` cannot be combined with character set options (`--simple`, `--charset`, `--charset-file`)
+- `--braille` cannot be used with `--gif-output`
 
 ### Half-Block Mode Restrictions
 

@@ -1,6 +1,6 @@
 use crate::{MonochoraError, Result};
 use crate::converter::{
-    fit_dimensions, image_to_ascii_with_dithering, image_to_block_ascii,
+    fit_dimensions, image_to_ascii_with_dithering, image_to_block_ascii, image_to_braille_ascii,
     image_to_colored_ascii_with_dithering, AsciiConverterConfig,
 };
 use crate::handler::GifData;
@@ -146,6 +146,7 @@ pub struct ResponsiveFrameManager {
     cached_frames: Option<Vec<Vec<String>>>,
     colored: bool,
     blocks: bool,
+    braille: bool,
 }
 
 impl ResponsiveFrameManager {
@@ -164,11 +165,18 @@ impl ResponsiveFrameManager {
             cached_frames: None,
             colored,
             blocks: false,
+            braille: false,
         }
     }
 
     pub fn with_blocks(mut self, blocks: bool) -> Self {
         self.blocks = blocks;
+        self.cached_frames = None;
+        self
+    }
+
+    pub fn with_braille(mut self, braille: bool) -> Self {
+        self.braille = braille;
         self.cached_frames = None;
         self
     }
@@ -203,11 +211,14 @@ impl ResponsiveFrameManager {
         )?;
 
         let blocks = self.blocks;
+        let braille = self.braille;
         let colored = self.colored;
         let new_frames: Result<Vec<Vec<String>>> = self.gif_data.frames
             .par_iter()
             .map(|frame| {
-                if blocks {
+                if braille {
+                    image_to_braille_ascii(&frame.image, &config, colored)
+                } else if blocks {
                     image_to_block_ascii(&frame.image, &config, colored)
                 } else if colored {
                     image_to_colored_ascii_with_dithering(&frame.image, &config)

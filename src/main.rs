@@ -1,6 +1,6 @@
 use clap::Parser;
 use monochora::{
-    converter::{AsciiConverterConfig, image_to_ascii_with_dithering, image_to_colored_ascii_with_dithering, image_to_block_ascii,
+    converter::{AsciiConverterConfig, image_to_ascii_with_dithering, image_to_colored_ascii_with_dithering, image_to_block_ascii, image_to_braille_ascii,
         DitheringAlgorithm, list_dithering_algorithms, fit_dimensions},
     display::{display_ascii_animation, get_terminal_size, print_ascii_frame, save_ascii_to_file, display_responsive_ascii_animation},
     handler::{decode_frames, FrameReader, GifFrame},
@@ -101,6 +101,9 @@ struct Args {
 
     #[clap(long, default_value_t = false, help = "Render with half-block characters (two pixels per character cell)")]
     blocks: bool,
+
+    #[clap(long, default_value_t = false, help = "Render with braille characters (2x4 dots per character cell)")]
+    braille: bool,
 }
 
 fn validate_dithering_args(args: &Args) -> Result<(), MonochoraError> {
@@ -181,6 +184,7 @@ fn validate_args(args: &Args) -> Result<(), MonochoraError> {
     validate_charset_options(args)?;
     validate_dithering_args(args)?;
     validate_block_options(args)?;
+    validate_braille_options(args)?;
 
     Ok(())
 }
@@ -246,6 +250,32 @@ fn validate_block_options(args: &Args) -> Result<(), MonochoraError> {
     if args.gif_output.is_some() {
         return Err(MonochoraError::Config(
             "Half-block mode (--blocks) cannot be used with --gif-output".to_string()
+        ));
+    }
+
+    Ok(())
+}
+
+fn validate_braille_options(args: &Args) -> Result<(), MonochoraError> {
+    if !args.braille {
+        return Ok(());
+    }
+
+    if args.blocks {
+        return Err(MonochoraError::Config(
+            "Braille mode (--braille) cannot be used with half-block mode (--blocks)".to_string()
+        ));
+    }
+
+    if args.simple || args.charset.is_some() || args.charset_file.is_some() {
+        return Err(MonochoraError::Config(
+            "Braille mode (--braille) cannot be used with character set options (--simple, --charset, --charset-file)".to_string()
+        ));
+    }
+
+    if args.gif_output.is_some() {
+        return Err(MonochoraError::Config(
+            "Braille mode (--braille) cannot be used with --gif-output".to_string()
         ));
     }
 
@@ -522,12 +552,13 @@ fn calculate_adjusted_frame_delays(
 fn convert_frame(
     frame: &GifFrame,
     config: &AsciiConverterConfig,
-    colored: bool,
-    blocks: bool,
+    args: &Args,
 ) -> Result<Vec<String>, MonochoraError> {
-    if blocks {
-        image_to_block_ascii(&frame.image, config, colored)
-    } else if colored {
+    if args.braille {
+        image_to_braille_ascii(&frame.image, config, args.colored)
+    } else if args.blocks {
+        image_to_block_ascii(&frame.image, config, args.colored)
+    } else if args.colored {
         image_to_colored_ascii_with_dithering(&frame.image, config)
     } else {
         image_to_ascii_with_dithering(&frame.image, config)
@@ -561,7 +592,7 @@ async fn process_ascii_conversion(
         
         let converted = batch
             .par_iter()
-            .map(|frame| convert_frame(frame, config, args.colored, args.blocks))
+            .map(|frame| convert_frame(frame, config, args))
             .collect::<Result<Vec<Vec<String>>, MonochoraError>>()?;
         
         ascii_frames.extend(converted);
@@ -700,7 +731,7 @@ async fn handle_responsive_terminal_display(
         frame_delays,
         initial_dims,
         args.colored,
-    ).with_blocks(args.blocks);
+    ).with_blocks(args.blocks).with_braille(args.braille);
 
     let mut watcher = TerminalWatcher::new()?;
     watcher.start_watching()?;

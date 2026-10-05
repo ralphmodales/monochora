@@ -4,6 +4,8 @@ use crate::{MonochoraError, Result};
 
 const COLORED_CHAR_CAPACITY: usize = 20;
 const BLOCK_CHAR_CAPACITY: usize = 40;
+const BRAILLE_BASE: u32 = 0x2800;
+const BRAILLE_DOT_BITS: [[u8; 2]; 4] = [[0x01, 0x08], [0x02, 0x10], [0x04, 0x20], [0x40, 0x80]];
 
 static SIMPLE_CHARS: &[char] = &[' ', '.', ':', '-', '=', '+', '*', '#', '%', '@'];
 static DETAILED_CHARS: &[char] = &[
@@ -637,6 +639,155 @@ where
             Ok(line)
         })
         .collect()
+}
+
+pub fn image_to_braille_ascii<I>(
+    image: &I,
+    config: &AsciiConverterConfig,
+    colored: bool,
+) -> Result<Vec<String>>
+where
+    I: GenericImageView<Pixel = Rgba<u8>> + Sync,
+{
+    config.validate()?;
+    
+    let (img_width, img_height) = image.dimensions();
+    if img_width == 0 || img_height == 0 {
+        return Err(MonochoraError::InvalidDimensions { width: img_width, height: img_height });
+    }
+    
+    let (target_width, target_height) = calculate_target_dimensions(
+        img_width, 
+        img_height, 
+        config
+    )?;
+    
+    if target_width == 0 || target_height == 0 {
+        return Err(MonochoraError::InvalidDimensions { width: target_width, height: target_height });
+    }
+    
+    let dot_width = target_width * 2;
+    let dot_height = target_height * 4;
+    let columns = source_columns(dot_width, img_width);
+    
+    let dots: Vec<Option<BrailleDot>> = (0..dot_height)
+        .into_par_iter()
+        .flat_map_iter(|y| {
+            let img_y = source_row(y, dot_height, img_height);
+            columns.iter().map(move |&img_x| {
+                let [r, g, b, a] = image.get_pixel(img_x, img_y).0;
+                if a == 0 {
+                    return None;
+                }
+                let brightness = calculate_brightness(r, g, b);
+                let brightness = if config.invert { 1.0 - brightness } else { brightness };
+                Some(BrailleDot { brightness, color: [r, g, b] })
+            })
+        })
+        .collect();
+    
+    let lit = light_braille_dots(&dots, dot_width, dot_height, config.dithering_algorithm);
+    
+    (0..target_height)
+        .into_par_iter()
+        .map(|cell_y| {
+            let capacity = if colored { target_width as usize * COLORED_CHAR_CAPACITY } else { target_width as usize * 3 };
+            let mut line = String::with_capacity(capacity);
+            let mut last_color = None;
+            
+            for cell_x in 0..target_width {
+                let mut bits = 0u8;
+                let mut color_sum = [0u32; 3];
+                let mut lit_count = 0u32;
+                
+                for (row, row_bits) in BRAILLE_DOT_BITS.iter().enumerate() {
+                    for (column, &bit) in row_bits.iter().enumerate() {
+                        let index = ((cell_y * 4 + row as u32) * dot_width + cell_x * 2 + column as u32) as usize;
+                        if lit[index] {
+                            bits |= bit;
+                            if let Some(dot) = &dots[index] {
+                                for (sum, channel) in color_sum.iter_mut().zip(dot.color) {
+                                    *sum += channel as u32;
+                                }
+                                lit_count += 1;
+                            }
+                        }
+                    }
+                }
+                
+                if bits == 0 {
+                    line.push(' ');
+                    continue;
+                }
+                
+                let ch = char::from_u32(BRAILLE_BASE + bits as u32).unwrap_or(' ');
+                if colored {
+                    let color = color_sum.map(|sum| ((sum + lit_count / 2) / lit_count) as u8);
+                    push_colored_char(&mut line, &mut last_color, color, ch);
+                } else {
+                    line.push(ch);
+                }
+            }
+            
+            if colored {
+                line.push_str("\x1b[0m");
+                line.shrink_to_fit();
+            }
+            Ok(line)
+        })
+        .collect()
+}
+
+struct BrailleDot {
+    brightness: f32,
+    color: [u8; 3],
+}
+
+fn light_braille_dots(
+    dots: &[Option<BrailleDot>],
+    dot_width: u32,
+    dot_height: u32,
+    dithering: Option<DitheringAlgorithm>,
+) -> Vec<bool> {
+    let dithering = dithering.unwrap_or(DitheringAlgorithm::None);
+    
+    if dithering == DitheringAlgorithm::None {
+        return dots
+            .par_iter()
+            .map(|dot| dot.as_ref().is_some_and(|dot| dot.brightness >= 0.5))
+            .collect();
+    }
+    
+    let kernel = get_dithering_kernel(dithering);
+    let mut error_buffer = ErrorBuffer::new(dot_width, dot_height);
+    let mut lit = vec![false; dots.len()];
+    
+    for y in 0..dot_height {
+        for x in 0..dot_width {
+            let index = (y * dot_width + x) as usize;
+            let Some(dot) = &dots[index] else {
+                continue;
+            };
+            
+            let value = (dot.brightness + error_buffer.get_error(x, y)).clamp(0.0, 1.0);
+            let on = value >= 0.5;
+            let error = value - if on { 1.0 } else { 0.0 };
+            lit[index] = on;
+            
+            for kernel_entry in &kernel {
+                let nx = x as i32 + kernel_entry.dx;
+                let ny = y as i32 + kernel_entry.dy;
+                
+                if nx >= 0 && ny >= 0 {
+                    error_buffer.add_error(nx as u32, ny as u32, error * kernel_entry.weight);
+                }
+            }
+        }
+        
+        error_buffer.next_row();
+    }
+    
+    lit
 }
 
 fn source_columns(target_width: u32, img_width: u32) -> Vec<u32> {
