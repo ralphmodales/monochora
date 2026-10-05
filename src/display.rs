@@ -220,6 +220,7 @@ fn playback_action(key: KeyEvent) -> Option<PlaybackAction> {
 struct PlaybackState {
     frame_idx: usize,
     frame_count: usize,
+    still: bool,
     iteration: usize,
     iterations: usize,
     paused: bool,
@@ -287,9 +288,11 @@ async fn play(
     let mut stdout = io::stdout();
     let mut buffer = Vec::new();
     
+    let frame_count = source.frame_count()?;
     let mut state = PlaybackState {
         frame_idx: 0,
-        frame_count: source.frame_count()?,
+        frame_count,
+        still: frame_count == 1 && matches!(source, FrameSource::Responsive { .. }),
         iteration: 0,
         iterations: if loop_count == 0 { usize::MAX } else { loop_count as usize },
         paused: false,
@@ -361,7 +364,7 @@ async fn play(
                     draw(&mut stdout, &mut buffer, &mut source, &state)?;
                 }
             }
-            _ = sleep_until(next_frame_at), if !state.paused => {
+            _ = sleep_until(next_frame_at), if !state.paused && !state.still => {
                 if state.is_last_frame() {
                     state.iteration += 1;
                     if state.iteration >= state.iterations {
@@ -395,6 +398,19 @@ pub async fn display_responsive_ascii_animation(
     loop_count: u16,
 ) -> Result<()> {
     play(FrameSource::Responsive { manager: frame_manager }, loop_count, Some(resize_rx), true).await
+}
+
+pub fn print_ascii_frame(frame: &[String]) -> Result<()> {
+    let stdout = io::stdout();
+    let mut writer = BufWriter::new(stdout.lock());
+    
+    for line in frame {
+        writer.write_all(line.as_bytes())?;
+        writer.write_all(b"\n")?;
+    }
+    
+    writer.flush()?;
+    Ok(())
 }
 
 pub async fn display_ascii_animation(

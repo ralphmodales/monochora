@@ -1,11 +1,12 @@
 # Monochora
 
-Monochora is a GIF to ASCII art converter written in Rust. It can transform GIF animations into playable ASCII animations in your terminal or save them as ASCII art files or even convert them back to colored GIF animations with ASCII characters.
+Monochora is a GIF and image to ASCII art converter written in Rust. It can transform GIF animations (as well as PNG, APNG, JPEG and WebP images) into playable ASCII animations in your terminal or save them as ASCII art files or even convert them back to colored GIF animations with ASCII characters.
 
 ## Features
 
 - **High-performance parallel processing** - Multi-threaded conversion for faster processing
 - Convert animated GIFs to ASCII art animations
+- **Image support** - PNG, JPEG and WebP images, plus animated PNG (APNG) and animated WebP
 - **Correct handling of optimized GIFs** - Frames that only store the changed area, transparency and all GIF disposal methods are layered the way web browsers do
 - **Support for both local files and URLs** - Download GIFs directly from the web
 - Play the animations directly in your terminal
@@ -66,6 +67,12 @@ cargo install monochora
 ```bash
 # Basic usage with local file (plays in terminal)
 monochora -i input.gif
+
+# Still images are printed once and stay on screen
+monochora -i photo.jpg -c
+
+# Animated WebP and animated PNG play just like GIFs
+monochora -i animation.webp --blocks -c
 
 # Basic usage with URL - downloads and converts automatically
 monochora -i https://example.com/animation.gif
@@ -166,7 +173,7 @@ monochora -i "https://example.com/cool.gif" --gif-output result.gif --black-on-w
 
 ```
 Options:
-  -i, --input <INPUT>                    Input GIF file path or URL (supports HTTP/HTTPS)
+  -i, --input <INPUT>                    Input file path or URL (GIF, PNG, APNG, JPEG, WebP; supports HTTP/HTTPS)
   -o, --output <OUTPUT>                  Output file path for text files
   -w, --width <WIDTH>                    Target width in characters
   -H, --height <HEIGHT>                  Target height in characters
@@ -580,6 +587,14 @@ monochora -i animation.gif
 
 Press `q` or `Esc` to exit the animation. See [Playback Controls](#playback-controls) for pausing, stepping through frames and changing speed.
 
+Still images (PNG, JPEG, WebP and single-frame GIFs) are printed once and stay on screen:
+
+```bash
+monochora -i photo.jpg -c
+```
+
+With `--responsive --watch-terminal`, a still image stays open until you press `q` and is redrawn when the terminal is resized.
+
 ### Speed Control Examples
 
 Control animation playback speed for different viewing experiences:
@@ -777,9 +792,10 @@ Monochora includes comprehensive input validation:
 
 ## URL Support
 
-Monochora supports downloading GIFs directly from URLs:
+Monochora supports downloading GIFs and images directly from URLs:
 
 - **Supported protocols**: HTTP and HTTPS
+- **Format detection**: The format is detected from the file's contents, so a link ending in `.gif` that actually serves WebP still works
 - **Automatic download**: Files are downloaded to temporary storage and cleaned up automatically
 - **Content validation**: Warns if the URL doesn't serve image content
 - **Timeout handling**: 30-second timeout for downloads
@@ -833,7 +849,7 @@ Monochora can also be used as a library in your Rust projects:
 use monochora::{
     converter::{image_to_ascii, AsciiConverterConfig},
     display::display_ascii_animation,
-    handler::decode_gif,
+    handler::decode_frames,
     output::{ascii_frames_to_gif_with_dimensions, AsciiGifOutputOptions},
     web::open_input,
 };
@@ -844,8 +860,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Handle both local files and URLs (downloaded files are deleted when `input` is dropped)
     let input = open_input("https://example.com/animation.gif").await?;
     
-    // Decode the GIF
-    let gif_data = decode_gif(input.path())?;
+    // Decode the GIF (or PNG, APNG, JPEG, WebP)
+    let gif_data = decode_frames(input.path())?;
     
     // Configure the converter with custom character set
     let config = AsciiConverterConfig {
@@ -921,7 +937,7 @@ Monochora works by:
 1. **Input validation**: Comprehensive validation of all command-line arguments including speed parameters
 2. **Input handling**: Accepts both local file paths and URLs (HTTP/HTTPS)
 3. **URL processing**: Downloads GIFs from URLs to temporary files when needed
-4. **GIF decoding**: Decodes GIF frames one at a time using the `gif` crate and layers each frame onto the previous one like a web browser does (honoring transparency and the keep, restore-to-background and restore-to-previous disposal methods)
+4. **Decoding**: Detects the format from the file's contents. GIF frames are decoded one at a time using the `gif` crate and layered onto the previous one like a web browser does (honoring transparency and the keep, restore-to-background and restore-to-previous disposal methods). PNG, APNG, JPEG and WebP (including animated WebP) are decoded with the `image` crate
 5. **Character set selection**: Chooses appropriate character set (built-in, custom inline, or file-based)
 6. **ASCII conversion**: Converts each frame to ASCII art based on pixel brightness using parallel processing
 7. **Dimension calculation**: Intelligently calculates dimensions with proper character aspect ratio handling
@@ -983,7 +999,7 @@ The ASCII GIF output uses several optimization techniques:
 ## Dependencies
 
 - `gif` - For GIF decoding and encoding
-- `image` - For image manipulation  
+- `image` - For image manipulation and PNG, APNG, JPEG and WebP decoding  
 - `imageproc` - For drawing text on images
 - `rusttype` - For font rendering in GIF output
 - `clap` - For command-line argument parsing

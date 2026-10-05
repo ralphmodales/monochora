@@ -2,8 +2,8 @@ use clap::Parser;
 use monochora::{
     converter::{AsciiConverterConfig, image_to_ascii_with_dithering, image_to_colored_ascii_with_dithering, image_to_block_ascii,
         DitheringAlgorithm, list_dithering_algorithms, fit_dimensions},
-    display::{display_ascii_animation, get_terminal_size, save_ascii_to_file, display_responsive_ascii_animation},
-    handler::{decode_gif, GifFrame, GifFrameReader},
+    display::{display_ascii_animation, get_terminal_size, print_ascii_frame, save_ascii_to_file, display_responsive_ascii_animation},
+    handler::{decode_frames, FrameReader, GifFrame},
     output::{ascii_frames_to_gif_with_dimensions, AsciiGifOutputOptions},
     terminal_watcher::{TerminalWatcher, ResponsiveFrameManager, TerminalDimensions, responsive_config},
     web::open_input,
@@ -15,10 +15,10 @@ use tracing::{error, info, warn};
 
 
 #[derive(Parser, Debug)]
-#[clap(author, version, about = "Convert GIF images to ASCII art animations")]
+#[clap(author, version, about = "Convert GIFs and images (PNG, APNG, JPEG, WebP) to ASCII art animations")]
 #[repr(C)]
 struct Args {
-    #[clap(short, long, help = "Input GIF file path or URL")]
+    #[clap(short, long, help = "Input file path or URL (GIF, PNG, APNG, JPEG, WebP)")]
     input: Option<String>,
 
     #[clap(short, long, help = "Output file path for text format")]
@@ -536,7 +536,7 @@ fn convert_frame(
 
 async fn process_ascii_conversion(
     args: &Args,
-    reader: &mut GifFrameReader,
+    reader: &mut FrameReader,
     config: &AsciiConverterConfig,
 ) -> Result<(Vec<Vec<String>>, Vec<u16>), MonochoraError> {
     if !args.quiet {
@@ -679,9 +679,9 @@ async fn handle_responsive_terminal_display(
     input_path: &std::path::Path,
     config: &AsciiConverterConfig,
 ) -> Result<(), MonochoraError> {
-    let gif_data = decode_gif(input_path)
+    let gif_data = decode_frames(input_path)
         .map_err(|e| {
-            error!("Failed to decode GIF: {}", e);
+            error!("Failed to decode image: {}", e);
             e
         })?;
     
@@ -711,7 +711,7 @@ async fn handle_responsive_terminal_display(
 
 fn log_loaded_gif(frame_count: usize, width: u32, height: u32, loop_count: u16) {
     info!(
-        "Loaded GIF: {} frames, {}x{}{}",
+        "Loaded {} frames, {}x{}{}",
         frame_count,
         width,
         height,
@@ -760,7 +760,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let input = args.input.as_ref().unwrap();
 
     if !args.quiet {
-        info!("Loading GIF: {}", input);
+        info!("Loading: {}", input);
     }
     
     let input_file = open_input(input).await
@@ -770,9 +770,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         })?;
     
     let input_path = input_file.path();
-    let mut reader = GifFrameReader::open(input_path)
+    let mut reader = FrameReader::open(input_path)
         .map_err(|e| {
-            error!("Failed to decode GIF: {}", e);
+            error!("Failed to decode image: {}", e);
             e
         })?;
     let gif_width = reader.width();
@@ -826,7 +826,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (ascii_frames, frame_delays) = process_ascii_conversion(&args, &mut reader, &config).await?;
     let loop_count = reader.loop_count()
         .map_err(|e| {
-            error!("Failed to decode GIF: {}", e);
+            error!("Failed to decode image: {}", e);
             e
         })?;
     drop(reader);
@@ -839,6 +839,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         handle_gif_output(&args, &ascii_frames, &frame_delays, gif_width, gif_height, loop_count).await?;
     } else if args.save || args.output.is_some() {
         handle_text_output(&args, &ascii_frames).await?;
+    } else if ascii_frames.len() == 1 {
+        print_ascii_frame(&ascii_frames[0])?;
     } else if args.responsive {
         display_ascii_animation(&ascii_frames, &frame_delays, loop_count, true).await?;
     } else {

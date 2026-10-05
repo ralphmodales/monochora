@@ -1,6 +1,8 @@
 use gif::{DecodeOptions, DisposalMethod};
-use image::{ImageBuffer, Rgba};
+use image::codecs::{jpeg::JpegDecoder, png::PngDecoder, webp::WebPDecoder};
+use image::{AnimationDecoder, DynamicImage, Frames, ImageBuffer, ImageDecoder, ImageFormat, Rgba, RgbaImage};
 use std::fs::File;
+use std::io::BufReader;
 use std::path::Path;
 use tracing::{info, warn};
 use crate::{MonochoraError, Result};
@@ -8,6 +10,8 @@ use crate::{MonochoraError, Result};
 const MAX_DIMENSION: u32 = 65535;
 const MAX_PIXELS: u64 = 100_000_000;
 const MAX_FRAMES: usize = 10000;
+const DEFAULT_FRAME_DELAY_MS: u16 = 100;
+const SUPPORTED_FORMATS: &str = "GIF, PNG, APNG, JPEG, WebP";
 
 #[repr(C)]
 #[derive(Clone)]
@@ -56,18 +60,7 @@ impl GifFrameReader {
         let width = decoder.width() as u32;
         let height = decoder.height() as u32;
         
-        if width == 0 || height == 0 {
-            return Err(MonochoraError::InvalidDimensions { width, height });
-        }
-        
-        if width > MAX_DIMENSION || height > MAX_DIMENSION {
-            return Err(MonochoraError::InvalidDimensions { width, height });
-        }
-        
-        let total_pixels = width as u64 * height as u64;
-        if total_pixels > MAX_PIXELS {
-            return Err(MonochoraError::InsufficientMemory);
-        }
+        check_image_size(width, height)?;
         
         info!("Decoding GIF: {}x{}", width, height);
         
@@ -134,6 +127,219 @@ impl Iterator for GifFrameReader {
         }
         result
     }
+}
+
+pub struct FrameReader {
+    frames: ReaderFrames,
+    width: u32,
+    height: u32,
+    frames_read: usize,
+    finished: bool,
+}
+
+enum ReaderFrames {
+    Gif(Box<GifFrameReader>),
+    Animated(Frames<'static>),
+    Still(Option<RgbaImage>),
+}
+
+impl FrameReader {
+    pub fn open<P: AsRef<Path>>(path: P) -> Result<Self> {
+        let path_ref = path.as_ref();
+        
+        let format = image::io::Reader::open(path_ref)
+            .map_err(MonochoraError::Io)?
+            .with_guessed_format()
+            .map_err(MonochoraError::Io)?
+            .format();
+        
+        match format {
+            Some(ImageFormat::Gif) => {
+                let reader = GifFrameReader::open(path_ref)?;
+                let (width, height) = (reader.width(), reader.height());
+                Ok(Self::new(ReaderFrames::Gif(Box::new(reader)), width, height))
+            }
+            Some(ImageFormat::Png) => {
+                let decoder = PngDecoder::new(open_buffered(path_ref)?)?;
+                let (width, height) = decoder.dimensions();
+                check_image_size(width, height)?;
+                
+                if decoder.is_apng() {
+                    info!("Decoding animated PNG: {}x{}", width, height);
+                    Ok(Self::new(ReaderFrames::Animated(decoder.apng().into_frames()), width, height))
+                } else {
+                    info!("Decoding PNG: {}x{}", width, height);
+                    let image = DynamicImage::from_decoder(decoder)?.into_rgba8();
+                    Ok(Self::new(ReaderFrames::Still(Some(image)), width, height))
+                }
+            }
+            Some(ImageFormat::WebP) => {
+                let decoder = WebPDecoder::new(open_buffered(path_ref)?)?;
+                let (width, height) = decoder.dimensions();
+                check_image_size(width, height)?;
+                
+                if decoder.has_animation() {
+                    info!("Decoding animated WebP: {}x{}", width, height);
+                    Ok(Self::new(ReaderFrames::Animated(decoder.into_frames()), width, height))
+                } else {
+                    info!("Decoding WebP: {}x{}", width, height);
+                    let image = DynamicImage::from_decoder(decoder)?.into_rgba8();
+                    Ok(Self::new(ReaderFrames::Still(Some(image)), width, height))
+                }
+            }
+            Some(ImageFormat::Jpeg) => {
+                let decoder = JpegDecoder::new(open_buffered(path_ref)?)?;
+                let (width, height) = decoder.dimensions();
+                check_image_size(width, height)?;
+                
+                info!("Decoding JPEG: {}x{}", width, height);
+                let image = DynamicImage::from_decoder(decoder)?.into_rgba8();
+                Ok(Self::new(ReaderFrames::Still(Some(image)), width, height))
+            }
+            Some(other) => Err(MonochoraError::UnsupportedFormat {
+                format: format!(
+                    "{} (supported formats: {})",
+                    other.extensions_str().first().copied().unwrap_or("unknown"),
+                    SUPPORTED_FORMATS
+                ),
+            }),
+            None => Err(MonochoraError::UnsupportedFormat {
+                format: format!("unrecognized file (supported formats: {})", SUPPORTED_FORMATS),
+            }),
+        }
+    }
+
+    fn new(frames: ReaderFrames, width: u32, height: u32) -> Self {
+        Self {
+            frames,
+            width,
+            height,
+            frames_read: 0,
+            finished: false,
+        }
+    }
+
+    pub fn width(&self) -> u32 {
+        self.width
+    }
+
+    pub fn height(&self) -> u32 {
+        self.height
+    }
+
+    pub fn loop_count(&self) -> Result<u16> {
+        if let ReaderFrames::Gif(reader) = &self.frames {
+            return reader.loop_count();
+        }
+        
+        match self.frames_read {
+            0 => Err(MonochoraError::GifDecode("No valid frames found in image".to_string())),
+            1 => Ok(1),
+            _ => Ok(0),
+        }
+    }
+
+    fn read_frame(&mut self) -> Result<Option<GifFrame>> {
+        if self.finished {
+            return Ok(None);
+        }
+        
+        let frame = match &mut self.frames {
+            ReaderFrames::Gif(reader) => reader.next().transpose()?,
+            ReaderFrames::Still(image) => image.take().map(|image| GifFrame {
+                image,
+                delay_time_ms: DEFAULT_FRAME_DELAY_MS,
+            }),
+            ReaderFrames::Animated(frames) => match frames.next() {
+                Some(frame) => {
+                    if self.frames_read >= MAX_FRAMES {
+                        warn!("Reached maximum frame limit of {}, stopping decode", MAX_FRAMES);
+                        None
+                    } else {
+                        Some(animation_frame(frame?, self.width, self.height)?)
+                    }
+                }
+                None => None,
+            },
+        };
+        
+        match frame {
+            Some(frame) => {
+                self.frames_read += 1;
+                Ok(Some(frame))
+            }
+            None => {
+                self.finished = true;
+                Ok(None)
+            }
+        }
+    }
+}
+
+impl Iterator for FrameReader {
+    type Item = Result<GifFrame>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let result = self.read_frame().transpose();
+        if matches!(result, Some(Err(_))) {
+            self.finished = true;
+        }
+        result
+    }
+}
+
+pub fn decode_frames<P: AsRef<Path>>(path: P) -> Result<GifData> {
+    let mut reader = FrameReader::open(path)?;
+    let frames = reader.by_ref().collect::<Result<Vec<GifFrame>>>()?;
+    let loop_count = reader.loop_count()?;
+    
+    Ok(GifData {
+        frames,
+        width: reader.width(),
+        height: reader.height(),
+        loop_count,
+    })
+}
+
+fn open_buffered(path: &Path) -> Result<BufReader<File>> {
+    File::open(path)
+        .map(BufReader::new)
+        .map_err(MonochoraError::Io)
+}
+
+fn check_image_size(width: u32, height: u32) -> Result<()> {
+    if width == 0 || height == 0 {
+        return Err(MonochoraError::InvalidDimensions { width, height });
+    }
+    
+    if width > MAX_DIMENSION || height > MAX_DIMENSION {
+        return Err(MonochoraError::InvalidDimensions { width, height });
+    }
+    
+    let total_pixels = width as u64 * height as u64;
+    if total_pixels > MAX_PIXELS {
+        return Err(MonochoraError::InsufficientMemory);
+    }
+    
+    Ok(())
+}
+
+fn animation_frame(frame: image::Frame, canvas_width: u32, canvas_height: u32) -> Result<GifFrame> {
+    let (numer, denom) = frame.delay().numer_denom_ms();
+    let delay_ms = numer.checked_div(denom).unwrap_or(0);
+    let delay_time_ms = if delay_ms == 0 {
+        DEFAULT_FRAME_DELAY_MS
+    } else {
+        delay_ms.min(u16::MAX as u32) as u16
+    };
+    
+    let image = frame.into_buffer();
+    if image.dimensions() != (canvas_width, canvas_height) {
+        let (width, height) = image.dimensions();
+        return Err(MonochoraError::InvalidDimensions { width, height });
+    }
+    
+    Ok(GifFrame { image, delay_time_ms })
 }
 
 pub fn decode_gif<P: AsRef<Path>>(path: P) -> Result<GifData> {
