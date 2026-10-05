@@ -6,6 +6,7 @@ Monochora is a GIF to ASCII art converter written in Rust. It can transform GIF 
 
 - **High-performance parallel processing** - Multi-threaded conversion for faster processing
 - Convert animated GIFs to ASCII art animations
+- **Correct handling of optimized GIFs** - Frames that only store the changed area, transparency and all GIF disposal methods are layered the way web browsers do
 - **Support for both local files and URLs** - Download GIFs directly from the web
 - Play the animations directly in your terminal
 - **Interactive playback controls** - Pause, step through frames and change speed while playing
@@ -929,7 +930,7 @@ Monochora works by:
 1. **Input validation**: Comprehensive validation of all command-line arguments including speed parameters
 2. **Input handling**: Accepts both local file paths and URLs (HTTP/HTTPS)
 3. **URL processing**: Downloads GIFs from URLs to temporary files when needed
-4. **GIF decoding**: Decodes GIF frames using the `gif` crate with parallel processing
+4. **GIF decoding**: Decodes GIF frames one at a time using the `gif` crate and layers each frame onto the previous one like a web browser does (honoring transparency and the keep, restore-to-background and restore-to-previous disposal methods)
 5. **Character set selection**: Chooses appropriate character set (built-in, custom inline, or file-based)
 6. **ASCII conversion**: Converts each frame to ASCII art based on pixel brightness using parallel processing
 7. **Dimension calculation**: Intelligently calculates dimensions with proper character aspect ratio handling

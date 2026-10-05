@@ -1,4 +1,4 @@
-use gif::DecodeOptions;
+use gif::{DecodeOptions, DisposalMethod};
 use image::{ImageBuffer, Rgba};
 use std::fs::File;
 use std::path::Path;
@@ -31,6 +31,7 @@ pub struct GifFrameReader {
     height: u32,
     frames_read: usize,
     finished: bool,
+    canvas: Vec<u8>,
 }
 
 impl GifFrameReader {
@@ -76,6 +77,7 @@ impl GifFrameReader {
             height,
             frames_read: 0,
             finished: false,
+            canvas: vec![0u8; width as usize * height as usize * 4],
         })
     }
 
@@ -115,7 +117,7 @@ impl GifFrameReader {
         }
 
         let delay_time_ms = if frame.delay == 0 { 100 } else { frame.delay * 10 };
-        let image = compose_frame(frame, self.width, self.height)?;
+        let image = compose_frame(&mut self.canvas, frame, self.width, self.height)?;
         self.frames_read += 1;
 
         Ok(Some(GifFrame { image, delay_time_ms }))
@@ -176,6 +178,7 @@ fn validate_frame(frame: &gif::Frame, canvas_width: u32, canvas_height: u32) -> 
 }
 
 fn compose_frame(
+    canvas: &mut [u8],
     frame: &gif::Frame,
     canvas_width: u32,
     canvas_height: u32,
@@ -187,19 +190,51 @@ fn compose_frame(
     let left = frame.left as usize;
     let top = frame.top as usize;
     let frame_stride = frame.width as usize * 4;
-    let copy_len = (frame.width as usize).min(canvas_w - left) * 4;
+    let copy_width = (frame.width as usize).min(canvas_w - left);
+    let copy_height = (frame.height as usize).min(canvas_h - top);
+    let row_range = |row: usize| {
+        let start = ((top + row) * canvas_w + left) * 4;
+        start..start + copy_width * 4
+    };
 
-    let mut buffer = vec![0u8; canvas_w * canvas_h * 4];
+    let saved_area: Option<Vec<u8>> = matches!(frame.dispose, DisposalMethod::Previous).then(|| {
+        (0..copy_height)
+            .flat_map(|row| canvas[row_range(row)].iter().copied())
+            .collect()
+    });
 
-    for (row, src) in frame.buffer.chunks_exact(frame_stride).take(canvas_h - top).enumerate() {
-        let dst = ((top + row) * canvas_w + left) * 4;
-        buffer[dst..dst + copy_len].copy_from_slice(&src[..copy_len]);
+    for (row, src) in frame.buffer.chunks_exact(frame_stride).take(copy_height).enumerate() {
+        let (dst_pixels, _) = canvas[row_range(row)].as_chunks_mut::<4>();
+        let (src_pixels, _) = src.as_chunks::<4>();
+        for (dst_pixel, src_pixel) in dst_pixels.iter_mut().zip(src_pixels) {
+            if src_pixel[3] != 0 {
+                *dst_pixel = *src_pixel;
+            }
+        }
     }
     
-    ImageBuffer::from_raw(canvas_width, canvas_height, buffer)
+    let image = ImageBuffer::from_raw(canvas_width, canvas_height, canvas.to_vec())
         .ok_or_else(|| MonochoraError::GifDecode(
             "Failed to create image buffer from frame data".to_string()
-        ))
+        ))?;
+
+    match frame.dispose {
+        DisposalMethod::Background => {
+            for row in 0..copy_height {
+                canvas[row_range(row)].fill(0);
+            }
+        }
+        DisposalMethod::Previous => {
+            if let Some(saved_area) = saved_area {
+                for (row, saved_row) in saved_area.chunks_exact(copy_width * 4).enumerate() {
+                    canvas[row_range(row)].copy_from_slice(saved_row);
+                }
+            }
+        }
+        DisposalMethod::Any | DisposalMethod::Keep => {}
+    }
+
+    Ok(image)
 }
 
 impl GifData {
