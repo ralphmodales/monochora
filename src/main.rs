@@ -4,6 +4,7 @@ use monochora::{
         DitheringAlgorithm, list_dithering_algorithms, fit_dimensions},
     display::{display_ascii_animation, get_terminal_size, print_ascii_frame, save_ascii_to_file, display_responsive_ascii_animation},
     handler::{decode_frames, FrameReader, GifFrame},
+    html::{ascii_frames_to_html, HtmlOutputOptions},
     output::{ascii_frames_to_gif_with_dimensions, AsciiGifOutputOptions},
     terminal_watcher::{TerminalWatcher, ResponsiveFrameManager, TerminalDimensions, responsive_config},
     web::open_input,
@@ -44,6 +45,9 @@ struct Args {
     
     #[clap(long, help = "Generate GIF output. Optionally specify path (e.g., --gif-output or --gif-output path/name.gif)")]
     gif_output: Option<Option<PathBuf>>,
+
+    #[clap(long, help = "Generate an HTML page that plays the animation in any browser. Optionally specify path (e.g., --html-output or --html-output path/name.html)")]
+    html_output: Option<Option<PathBuf>>,
 
     #[clap(long, default_value_t = 14.0, help = "Font size for GIF output")]
     font_size: f32,
@@ -174,7 +178,7 @@ fn validate_args(args: &Args) -> Result<(), MonochoraError> {
         ));
     }
 
-    if args.responsive && (args.gif_output.is_some() || args.save || args.output.is_some()) {
+    if args.responsive && (args.gif_output.is_some() || args.html_output.is_some() || args.save || args.output.is_some()) {
         return Err(MonochoraError::Config(
             "Responsive mode cannot be used with file output options".to_string()
         ));
@@ -199,19 +203,20 @@ fn validate_conflicting_options(args: &Args) -> Result<(), MonochoraError> {
 
     let output_modes = [
         args.gif_output.is_some(),
+        args.html_output.is_some(),
         args.save || args.output.is_some(),
     ];
     let active_modes = output_modes.iter().filter(|&&x| x).count();
     
     if active_modes > 1 {
         return Err(MonochoraError::Config(
-            "Cannot use multiple output modes simultaneously. Choose one: --gif-output, --save/--output, or terminal display".to_string()
+            "Cannot use multiple output modes simultaneously. Choose one: --gif-output, --html-output, --save/--output, or terminal display".to_string()
         ));
     }
 
-    if (args.white_on_black || args.black_on_white) && args.gif_output.is_none() {
+    if (args.white_on_black || args.black_on_white) && args.gif_output.is_none() && args.html_output.is_none() {
         return Err(MonochoraError::Config(
-            "Background color options (--white-on-black, --black-on-white) can only be used with --gif-output".to_string()
+            "Background color options (--white-on-black, --black-on-white) can only be used with --gif-output or --html-output".to_string()
         ));
     }
 
@@ -221,7 +226,7 @@ fn validate_conflicting_options(args: &Args) -> Result<(), MonochoraError> {
         ));
     }
 
-    if args.fit_terminal && (args.gif_output.is_some() || args.save || args.output.is_some()) {
+    if args.fit_terminal && (args.gif_output.is_some() || args.html_output.is_some() || args.save || args.output.is_some()) {
         return Err(MonochoraError::Config(
             "Terminal fitting (--fit-terminal) cannot be used with file output options".to_string()
         ));
@@ -457,7 +462,7 @@ fn calculate_gif_dimensions(
 }
 
 fn terminal_fit_area(args: &Args) -> Option<(u32, u32)> {
-    let terminal_playback = args.gif_output.is_none() && !args.save && args.output.is_none() && !args.responsive;
+    let terminal_playback = args.gif_output.is_none() && args.html_output.is_none() && !args.save && args.output.is_none() && !args.responsive;
     let explicit_size = args.width.is_some() || args.height.is_some() || args.scale.is_some();
 
     if !terminal_playback || explicit_size {
@@ -491,32 +496,33 @@ fn generate_default_output_path(input: &str) -> PathBuf {
     }
 }
 
-fn generate_gif_output_path(input: &str, gif_output: &Option<Option<PathBuf>>) -> PathBuf {
-    match gif_output {
+fn generate_output_path(input: &str, output: &Option<Option<PathBuf>>, extension: &str) -> PathBuf {
+    match output {
         Some(Some(path)) => {
             if path.extension().is_none() {
-                path.with_extension("gif")
+                path.with_extension(extension)
             } else {
                 path.clone()
             }
         }
         Some(None) => {
             if input.starts_with("http") {
-                PathBuf::from("ascii_downloaded.gif")
+                PathBuf::from(format!("ascii_downloaded.{}", extension))
             } else {
                 let input_path = PathBuf::from(input);
                 match input_path.file_stem() {
                     Some(stem) => {
                         let mut name = String::from("ascii_");
                         name.push_str(&stem.to_string_lossy());
-                        name.push_str(".gif");
+                        name.push('.');
+                        name.push_str(extension);
                         PathBuf::from(name)
                     }
-                    None => PathBuf::from("ascii_output.gif")
+                    None => PathBuf::from(format!("ascii_output.{}", extension))
                 }
             }
         }
-        None => unreachable!("This function should only be called when gif_output is Some"),
+        None => unreachable!("This function should only be called when the output option is Some"),
     }
 }
 
@@ -623,7 +629,7 @@ async fn handle_gif_output(
     loop_count: u16,
 ) -> Result<(), MonochoraError> {
     let input = args.input.as_ref().unwrap();
-    let output_path = generate_gif_output_path(input, &args.gif_output);
+    let output_path = generate_output_path(input, &args.gif_output, "gif");
     
     if !args.quiet {
         info!("Generating ASCII GIF animation: {}", output_path.display());
@@ -660,6 +666,40 @@ async fn handle_gif_output(
     let gif_time = gif_start.elapsed();
     if !args.quiet {
         info!("GIF generation completed in {:.2}s", gif_time.as_secs_f64());
+    }
+    
+    println!("Done! Output saved to: {}", output_path.display());
+    Ok(())
+}
+
+async fn handle_html_output(
+    args: &Args,
+    ascii_frames: &[Vec<String>],
+    frame_delays: &[u16],
+    loop_count: u16,
+) -> Result<(), MonochoraError> {
+    let input = args.input.as_ref().unwrap();
+    let output_path = generate_output_path(input, &args.html_output, "html");
+    
+    if !args.quiet {
+        info!("Generating HTML animation: {}", output_path.display());
+    }
+    
+    let html_start = std::time::Instant::now();
+    
+    let mut options = HtmlOutputOptions::default();
+    if let Some(stem) = PathBuf::from(input).file_stem() {
+        options.title = stem.to_string_lossy().into_owned();
+    }
+    if args.black_on_white {
+        options.bg_color = [255, 255, 255];
+        options.text_color = [0, 0, 0];
+    }
+    
+    ascii_frames_to_html(ascii_frames, frame_delays, loop_count, &output_path, &options)?;
+    
+    if !args.quiet {
+        info!("HTML generation completed in {:.2}s", html_start.elapsed().as_secs_f64());
     }
     
     println!("Done! Output saved to: {}", output_path.display());
@@ -868,6 +908,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if args.gif_output.is_some() {
         handle_gif_output(&args, &ascii_frames, &frame_delays, gif_width, gif_height, loop_count).await?;
+    } else if args.html_output.is_some() {
+        handle_html_output(&args, &ascii_frames, &frame_delays, loop_count).await?;
     } else if args.save || args.output.is_some() {
         handle_text_output(&args, &ascii_frames).await?;
     } else if ascii_frames.len() == 1 {

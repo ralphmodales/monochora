@@ -16,6 +16,7 @@ Monochora is a GIF and image to ASCII art converter written in Rust. It can tran
 - Support for colored ASCII art (with ANSI color codes)
 - **Half-block mode** - Two pixels per character cell for sharp, image-like terminal output
 - **Braille mode** - 2x4 dots per character cell for the highest detail, great with dithering
+- **HTML export** - Save a single web page that plays the animation in any browser, so you can share it with anyone
 - **Customizable character sets** - Built-in sets, inline strings, or custom files
 - Multiple output options (terminal, text file, or GIF output)
 - Advanced dithering algorithms - Multiple error diffusion algorithms for enhanced ASCII art quality
@@ -133,6 +134,9 @@ monochora -i input.gif --gif-output output.gif --speed 0.8 --dither stucki
 # Save as high-quality ASCII GIF animation with speed adjustment
 monochora -i input.gif --gif-output output.gif --speed 0.8
 
+# Save a web page that plays the animation in any browser
+monochora -i input.gif -c -w 120 --html-output animation.html
+
 # Generate GIF with default name and target FPS
 monochora -i input.gif --gif-output --fps 24
 
@@ -186,6 +190,7 @@ Options:
   -p, --simple                           Use simple character set
   -s, --save                             Save to text file instead of playing
       --gif-output [<GIF_OUTPUT>]        Output as ASCII GIF file (optional path)
+      --html-output [<HTML_OUTPUT>]      Output as an HTML page that plays in any browser (optional path)
       --font-size <FONT_SIZE>            Font size for GIF output [default: 14.0]
       --white-on-black                   White text on black background for GIF
       --black-on-white                   Black text on white background for GIF
@@ -330,6 +335,34 @@ monochora -i animation.gif --braille -c --responsive --watch-terminal
 
 # Save braille frames to a text file
 monochora -i animation.gif --braille --dither jarvis -o ./braille.txt
+```
+
+## HTML Export
+
+`--html-output` saves a single `.html` file that plays the animation in any web browser. Everything is inside that one file, so you can send it to a friend or put it on a website and it plays without monochora, a terminal or an internet connection.
+
+- **Every mode works**: plain ASCII, `-c`, `--blocks`, `--braille`, dithering, custom character sets and all input formats
+- **Fits the window**: The animation scales to fit the browser window and refits when the window is resized
+- **Same controls as the terminal**: `Space` or clicking the animation pauses, `←`/`→` steps through frames, `+`/`-` changes speed and `0` resets it
+- **Timing**: Uses the same frame delays, `--speed`/`--fps` adjustments and looping as terminal playback
+- **Colors**: `--white-on-black` (default) and `--black-on-white` set the page colors for non-colored output
+- **File size**: Colored output stores a color for nearly every character, so pass `-w` (for example `-w 120`) to keep files small enough to send easily
+- **Default name**: Without a path, the file is saved as `ascii_<input name>.html`
+
+### HTML Examples
+
+```bash
+# Colored ASCII page
+monochora -i animation.gif -c -w 120 --html-output
+
+# Half-block page with a custom name
+monochora -i animation.gif --blocks -c -w 120 --html-output luffy.html
+
+# Black and white braille page
+monochora -i animation.gif --braille --dither floyd-steinberg -w 120 --html-output braille.html
+
+# Dark text on a light page, at half speed
+monochora -i animation.gif -w 100 --black-on-white --speed 0.5 --html-output light.html
 ```
 
 ## Speed Control
@@ -490,6 +523,7 @@ Monochora enforces exclusive output modes to avoid conflicts:
 - **Terminal display**: Default mode when no output options are specified
 - **Text file output**: Use `--save` or `--output <file>`
 - **GIF output**: Use `--gif-output [path]`
+- **HTML output**: Use `--html-output [path]`
 
 **You cannot combine multiple output modes in a single command.**
 
@@ -533,7 +567,7 @@ Speed control options are mutually exclusive:
 
 ### Background Color Options
 
-- `--white-on-black` and `--black-on-white` can only be used with `--gif-output`
+- `--white-on-black` and `--black-on-white` can only be used with `--gif-output` or `--html-output`
 - These options are mutually exclusive
 - Without these flags, GIF output uses default colors (white text on black background)
 
