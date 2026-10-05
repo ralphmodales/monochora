@@ -8,6 +8,7 @@ Monochora is a GIF to ASCII art converter written in Rust. It can transform GIF 
 - Convert animated GIFs to ASCII art animations
 - **Support for both local files and URLs** - Download GIFs directly from the web
 - Play the animations directly in your terminal
+- **Interactive playback controls** - Pause, step through frames and change speed while playing
 - **Speed control** - Adjust animation speed with multipliers or target FPS
 - Save animations as text files or high-quality ASCII GIF files
 - Support for colored ASCII art (with ANSI color codes)
@@ -195,6 +196,24 @@ Options:
   -h, --help                             Print help
   -V, --version                          Print version
 ```
+
+## Playback Controls
+
+While an animation plays in the terminal, these keys work instantly (no Enter needed):
+
+| Key | Action |
+|-----|--------|
+| `Space` or `p` | Pause / resume |
+| `←` / `→` | Step back / forward one frame (pauses playback) |
+| `+` / `-` | Speed up / slow down (0.25× to 4×) |
+| `0` | Back to normal speed |
+| `q`, `Esc` or `Ctrl+C` | Quit |
+
+- While paused, and briefly after changing the speed, a status line under the animation shows the current frame and speed
+- Live speed changes stack on top of `--speed` and `--fps`
+- Controls work in every terminal playback mode, including `--responsive` and `--blocks`
+- The terminal is always restored when playback ends, even on `Ctrl+C`
+- If no keyboard is available (for example, when there is no terminal attached), the animation plays without controls
 
 ## Dithering Algorithms
 
@@ -558,7 +577,7 @@ To play an animation in your terminal:
 monochora -i animation.gif
 ```
 
-Press `q` or `Esc` to exit the animation.
+Press `q` or `Esc` to exit the animation. See [Playback Controls](#playback-controls) for pausing, stepping through frames and changing speed.
 
 ### Speed Control Examples
 

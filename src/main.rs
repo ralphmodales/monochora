@@ -667,7 +667,7 @@ async fn handle_terminal_display(
     loop_count: u16,
 ) -> Result<(), MonochoraError> {
     if !args.quiet {
-        info!("Press 'q' or 'Esc' to exit the animation...");
+        info!("Controls: space pause, ←/→ step, +/- speed, 0 normal speed, q quit");
     }
     
     display_ascii_animation(ascii_frames, frame_delays, loop_count, true).await

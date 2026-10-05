@@ -11,7 +11,8 @@ image = { version = "0.24.6", default-features = false }
 imageproc = "0.23.0"  
 rusttype = "0.9.3"    
 clap = { version = "4.3.0", features = ["derive"] }
-crossterm = "0.26.1"
+crossterm = { version = "0.26.1", features = ["event-stream"] }
+futures-core = "0.3"
 anyhow = "1.0.71"
 tokio = { version = "1.28.2", features = ["full"] }
 reqwest = { version = "0.11", features = ["stream"] }
