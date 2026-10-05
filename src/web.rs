@@ -1,11 +1,54 @@
 use crate::{MonochoraError, Result};
 use std::io::Write;
-use std::path::PathBuf;
-use tempfile::NamedTempFile;
+use std::path::{Path, PathBuf};
+use tempfile::{NamedTempFile, TempPath};
 use url::Url;
 use tracing::{debug, info, warn};
 
+pub struct InputFile {
+    path: PathBuf,
+    _temp_file: Option<TempPath>,
+}
+
+impl InputFile {
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+pub async fn open_input(input: &str) -> Result<InputFile> {
+    if is_url(input) {
+        let temp_path = download_to_temp_path(input).await?;
+        info!("Downloaded successfully to temporary file: {}", temp_path.display());
+        
+        Ok(InputFile {
+            path: temp_path.to_path_buf(),
+            _temp_file: Some(temp_path),
+        })
+    } else {
+        Ok(InputFile {
+            path: get_input_path(input).await?,
+            _temp_file: None,
+        })
+    }
+}
+
 pub async fn download_gif_from_url(url: &str) -> Result<PathBuf> {
+    let temp_path = download_to_temp_path(url).await?;
+    let final_path = temp_path.keep()
+        .map_err(|e| MonochoraError::Io(
+            std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("Failed to persist temporary file: {}", e)
+            )
+        ))?;
+    
+    info!("Downloaded successfully to temporary file: {}", final_path.display());
+    
+    Ok(final_path)
+}
+
+async fn download_to_temp_path(url: &str) -> Result<TempPath> {
     let parsed_url = Url::parse(url)
         .map_err(|e| MonochoraError::UrlParse(e))?;
     
@@ -81,18 +124,7 @@ pub async fn download_gif_from_url(url: &str) -> Result<PathBuf> {
     temp_file.write_all(&bytes)
         .map_err(|e| MonochoraError::Io(e))?;
     
-    let temp_path = temp_file.into_temp_path();
-    let final_path = temp_path.keep()
-        .map_err(|e| MonochoraError::Io(
-            std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("Failed to persist temporary file: {}", e)
-            )
-        ))?;
-    
-    info!("Downloaded successfully to temporary file: {}", final_path.display());
-    
-    Ok(final_path)
+    Ok(temp_file.into_temp_path())
 }
 
 fn get_file_extension_from_url(url: &Url) -> Option<String> {

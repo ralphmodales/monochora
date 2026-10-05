@@ -134,7 +134,7 @@ monochora -i input.gif -w 100 -H 50
 # Scale the original dimensions (0.5 = half size, 2.0 = double size)
 monochora -i input.gif --scale 0.5
 
-# Fit to terminal width 
+# Fit to the terminal window (also the default for terminal playback)
 monochora -i input.gif --fit-terminal
 
 # Disable aspect ratio preservation
@@ -180,7 +180,7 @@ Options:
       --black-on-white                   Black text on white background for GIF
       --speed <SPEED>                    Animation speed multiplier (0.1-10.0, where 1.0 = original speed)
       --fps <FPS>                        Target frames per second (1-120)
-      --fit-terminal                     Fit ASCII art to terminal width
+      --fit-terminal                     Fit ASCII art to the terminal window (default for terminal playback)
       --scale <SCALE>                    Scale factor for original dimensions
       --preserve-aspect <PRESERVE_ASPECT> Preserve original aspect ratio [default: true]
       --threads <THREADS>                Number of threads for parallel processing
@@ -253,7 +253,7 @@ monochora --list-dithering
 
 ### Dithering Notes
 
-- **Performance**: Dithering algorithms (except none) use sequential processing, which may be slower than non-dithered parallel processing.
+- **Performance**: Each frame is dithered on a single thread (error diffusion works pixel by pixel), so dithering is slower than plain conversion, but separate frames are still processed in parallel.
 - **Quality**: Algorithms like jarvis and sierra provide higher quality but require more computation.
 - **Use Cases**:
 floyd-steinberg: Best for most images, balances quality and speed.
@@ -404,7 +404,7 @@ monochora -i anime.gif --charset "・〆ヲァィヵヶ"  # Japanese characters
 monochora -i mandala.gif --charset " ༄༅༆༇༈"    # Tibetan symbols
 
 # Specialized applications  
-monochora -i xray.png --charset " .-+*#%@@"      # Medical imaging
+monochora -i xray.png --charset " .-+*#%@"      # Medical imaging
 monochora -i diagram.gif --charset "⠀⠁⠂⠃⠄⠅⠆⠇"  # Braille patterns
 ```
 
@@ -414,7 +414,7 @@ Store reusable character sets in text files:
 
 ```bash
 # Create a character set file
-echo " .-+*#%@@" > density.txt
+echo " .-+*#%@" > density.txt
 monochora -i image.gif --charset-file density.txt
 
 # Organize sets by category
@@ -661,7 +661,7 @@ monochora -i animation.gif --scale 0.5 --speed 2.0
 
 ### Fit to Terminal
 
-Make the animation fit your terminal width:
+Make the animation fit your terminal window. Terminal playback already does this by default unless you pass `-w`, `-H` or `--scale`:
 
 ```bash
 # Basic terminal fitting
@@ -803,13 +803,13 @@ monochora -i "https://example.com/path/to/animation.gif" --gif-output result.gif
 
 Monochora offers intelligent dimension control with proper character aspect ratio handling:
 
-- **Default**: Uses original GIF dimensions with character aspect correction
+- **Default**: Terminal playback fits the animation to your terminal window; file output uses the original GIF dimensions with character aspect correction
 - **Character aspect ratio**: Automatically accounts for the ~2:1 width-to-height ratio of monospace characters
 - **--width only**: Sets width, calculates height to preserve image aspect ratio
 - **--height only**: Sets height, calculates width to preserve image aspect ratio  
 - **--width and --height**: Uses exact dimensions (may distort unless aspect preservation is disabled)
 - **--scale**: Multiplies original dimensions by scale factor with character correction
-- **--fit-terminal**: Fits to terminal width (when not saving to file)
+- **--fit-terminal**: Fits to the terminal window, both width and height (when not saving to file)
 - **--preserve-aspect false**: Disables automatic aspect ratio preservation
 
 ### Dimension Examples
@@ -831,49 +831,40 @@ Monochora can also be used as a library in your Rust projects:
 
 ```rust
 use monochora::{
-    converter::{image_to_ascii, image_to_ascii_with_dithering, AsciiConverterConfig, DitheringAlgorithm},
-    handler::decode_gif,
+    converter::{image_to_ascii, AsciiConverterConfig},
     display::display_ascii_animation,
+    handler::decode_gif,
     output::{ascii_frames_to_gif_with_dimensions, AsciiGifOutputOptions},
-    web::get_input_path,
-    timing::calculate_adjusted_frame_delays,
+    web::open_input,
 };
 use rayon::prelude::*;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Handle both local files and URLs
-    let input_path = get_input_path("https://example.com/animation.gif").await?;
+    // Handle both local files and URLs (downloaded files are deleted when `input` is dropped)
+    let input = open_input("https://example.com/animation.gif").await?;
     
     // Decode the GIF
-    let gif_data = decode_gif(&input_path)?;
+    let gif_data = decode_gif(input.path())?;
     
     // Configure the converter with custom character set
-    let custom_chars: Vec<char> = " ·∘○●◉".chars().collect();
     let config = AsciiConverterConfig {
         width: Some(80),
-        height: None,
-        char_aspect: 0.5,
-        invert: false,
-        detailed: true,
-        preserve_aspect_ratio: true,
-        scale_factor: Some(1.5), // 150% of original size
-        custom_charset: Some(custom_chars),
+        custom_charset: Some(" ·∘○●◉".chars().collect()),
+        ..Default::default()
     };
     
     // Convert frames to ASCII in parallel
-    let results: Vec<(Vec<String>, u16)> = gif_data.frames
+    let ascii_frames = gif_data.frames
         .par_iter()
-        .map(|frame| {
-            let ascii_frame = image_to_ascii(&frame.image, &config);
-            (ascii_frame, frame.delay_time_ms)
-        })
-        .collect();
-    
-    let (ascii_frames, mut frame_delays): (Vec<_>, Vec<_>) = results.into_iter().unzip();
+        .map(|frame| image_to_ascii(&frame.image, &config))
+        .collect::<Result<Vec<_>, _>>()?;
     
     // Adjust frame delays for speed control (example: 2x speed)
-    frame_delays = calculate_adjusted_frame_delays(&frame_delays, Some(2.0), None)?;
+    let frame_delays: Vec<u16> = gif_data.frames
+        .iter()
+        .map(|frame| (frame.delay_time_ms / 2).max(1))
+        .collect();
     
     // Display the animation
     display_ascii_animation(&ascii_frames, &frame_delays, gif_data.loop_count, true).await?;
@@ -958,7 +949,7 @@ Dithering enhances ASCII art quality by distributing quantization errors:
 
 1. **Algorithm selection**: Supports multiple algorithms (Floyd-Steinberg, Atkinson, Jarvis, etc.)
 2. **Error diffusion**: Spreads brightness errors to neighboring pixels based on algorithm-specific kernels
-3. **Sequential processing**: Ensures accurate error propagation (disables parallel processing)
+3. **Per-frame processing**: Error diffusion runs pixel by pixel within each frame, while separate frames are dithered in parallel
 4. **Compatibility**: Works with both monochrome and colored ASCII output
 5. **Performance trade-off**: Higher quality at the cost of increased processing time
 
@@ -980,7 +971,7 @@ The ASCII GIF output uses several optimization techniques:
 - **Scalable**: Performance improves with more CPU cores
 - **Optimized algorithms**: Different processing strategies based on output type and quality settings
 - **Efficient speed calculations**: Minimal overhead for frame timing adjustments
-- **Dithering performance**: Sequential processing for dithering may increase processing time for higher quality
+- **Dithering performance**: Each frame is dithered on one thread, so dithering takes longer than plain conversion, but frames still run in parallel
 
 ### Typical Performance
 

@@ -6,7 +6,7 @@ use monochora::{
     handler::{decode_gif, GifFrame, GifFrameReader},
     output::{ascii_frames_to_gif_with_dimensions, AsciiGifOutputOptions},
     terminal_watcher::{TerminalWatcher, ResponsiveFrameManager, TerminalDimensions, responsive_config},
-    web::get_input_path,
+    web::open_input,
     MonochoraError,
 };
 use rayon::prelude::*;
@@ -60,7 +60,7 @@ struct Args {
     #[clap(long, help = "Scale factor for dimensions")]
     scale: Option<f32>,
     
-    #[clap(long, default_value_t = true, help = "Preserve aspect ratio")]
+    #[clap(long, default_value_t = true, action = clap::ArgAction::Set, help = "Preserve aspect ratio (true or false)")]
     preserve_aspect: bool,
 
     #[clap(long, help = "Number of threads for parallel processing")]
@@ -329,7 +329,7 @@ fn list_available_charsets() {
     println!("  detailed: {}", " .'`^\",:;Il!i><~+_-?][}{1)(|\\/tfjrxnuvczXYUJCLQ0OZmwqpdbkhao*#MW&8%B@");
     
     println!("\nExample Custom Sets:");
-    println!("  density:    \" .-+*#%@@\"");
+    println!("  density:    \" .-+*#%@\"");
     println!("  minimal:    \" .oO@\"");
     println!("  technical:  \" .-=+*#\"");
     println!("  artistic:   \" ·∘○●◉\"");
@@ -362,7 +362,7 @@ fn get_custom_charset(args: &Args) -> Result<Option<Vec<char>>, MonochoraError> 
     Ok(None)
 }
 
-fn setup_logging(level: &str) -> Result<(), MonochoraError> {
+fn setup_logging(level: &str, quiet: bool) -> Result<(), MonochoraError> {
     let filter = match level.to_lowercase().as_str() {
         "error" => "error",
         "warn" => "warn", 
@@ -371,6 +371,7 @@ fn setup_logging(level: &str) -> Result<(), MonochoraError> {
         "trace" => "trace",
         _ => "info",
     };
+    let filter = if quiet && filter == "info" { "warn" } else { filter };
 
     tracing_subscriber::fmt()
         .with_env_filter(filter)
@@ -742,7 +743,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    if let Err(e) = setup_logging(&args.log_level) {
+    if let Err(e) = setup_logging(&args.log_level, args.quiet) {
         eprintln!("Warning: Failed to setup logging: {}", e);
     }
 
@@ -762,13 +763,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         info!("Loading GIF: {}", input);
     }
     
-    let input_path = get_input_path(input).await
+    let input_file = open_input(input).await
         .map_err(|e| {
             error!("Failed to get input path: {}", e);
             e
         })?;
     
-    let mut reader = GifFrameReader::open(&input_path)
+    let input_path = input_file.path();
+    let mut reader = GifFrameReader::open(input_path)
         .map_err(|e| {
             error!("Failed to decode GIF: {}", e);
             e
@@ -811,7 +813,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if args.responsive && args.watch_terminal {
         drop(reader);
-        handle_responsive_terminal_display(&args, &input_path, &config).await?;
+        handle_responsive_terminal_display(&args, input_path, &config).await?;
         return Ok(());
     }
 

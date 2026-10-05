@@ -1,7 +1,11 @@
 use crate::{MonochoraError, Result};
-use crate::converter::{fit_dimensions, image_to_ascii, image_to_block_ascii, image_to_colored_ascii, AsciiConverterConfig};
+use crate::converter::{
+    fit_dimensions, image_to_ascii_with_dithering, image_to_block_ascii,
+    image_to_colored_ascii_with_dithering, AsciiConverterConfig,
+};
 use crate::handler::GifData;
 use crossterm::terminal::size;
+use rayon::prelude::*;
 use std::sync::mpsc::{self, Sender};
 use std::thread;
 use std::time::Duration;
@@ -131,7 +135,6 @@ pub fn responsive_config(
     let mut config = config_template.clone();
     config.width = Some(target_width);
     config.height = Some(target_height);
-    config.dithering_algorithm = None;
     Ok(config)
 }
 
@@ -199,15 +202,17 @@ impl ResponsiveFrameManager {
             self.gif_data.height,
         )?;
 
+        let blocks = self.blocks;
+        let colored = self.colored;
         let new_frames: Result<Vec<Vec<String>>> = self.gif_data.frames
-            .iter()
+            .par_iter()
             .map(|frame| {
-                if self.blocks {
-                    image_to_block_ascii(&frame.image, &config, self.colored)
-                } else if self.colored {
-                    image_to_colored_ascii(&frame.image, &config)
+                if blocks {
+                    image_to_block_ascii(&frame.image, &config, colored)
+                } else if colored {
+                    image_to_colored_ascii_with_dithering(&frame.image, &config)
                 } else {
-                    image_to_ascii(&frame.image, &config)
+                    image_to_ascii_with_dithering(&frame.image, &config)
                 }
             })
             .collect();

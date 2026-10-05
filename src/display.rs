@@ -419,7 +419,7 @@ pub fn save_ascii_to_file<P: AsRef<std::path::Path>>(
     
     let path_ref = path.as_ref();
     
-    if let Some(parent) = path_ref.parent() {
+    if let Some(parent) = path_ref.parent().filter(|parent| !parent.as_os_str().is_empty()) {
         if !parent.exists() {
             return Err(MonochoraError::Io(
                 std::io::Error::new(
