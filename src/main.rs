@@ -5,7 +5,7 @@ use monochora::{
     display::{display_ascii_animation, get_terminal_size, print_ascii_frame, save_ascii_to_file, display_responsive_ascii_animation},
     handler::{decode_frames, FrameReader, GifFrame},
     html::{ascii_frames_to_html, HtmlOutputOptions},
-    output::{ascii_frames_to_gif_with_dimensions, AsciiGifOutputOptions},
+    output::{ascii_frames_to_gif_with_dimensions, gif_cell_size, AsciiGifOutputOptions, GifRenderMode},
     terminal_watcher::{TerminalWatcher, ResponsiveFrameManager, TerminalDimensions, responsive_config},
     web::open_input,
     MonochoraError,
@@ -252,12 +252,6 @@ fn validate_block_options(args: &Args) -> Result<(), MonochoraError> {
         ));
     }
 
-    if args.gif_output.is_some() {
-        return Err(MonochoraError::Config(
-            "Half-block mode (--blocks) cannot be used with --gif-output".to_string()
-        ));
-    }
-
     Ok(())
 }
 
@@ -275,12 +269,6 @@ fn validate_braille_options(args: &Args) -> Result<(), MonochoraError> {
     if args.simple || args.charset.is_some() || args.charset_file.is_some() {
         return Err(MonochoraError::Config(
             "Braille mode (--braille) cannot be used with character set options (--simple, --charset, --charset-file)".to_string()
-        ));
-    }
-
-    if args.gif_output.is_some() {
-        return Err(MonochoraError::Config(
-            "Braille mode (--braille) cannot be used with --gif-output".to_string()
         ));
     }
 
@@ -429,6 +417,16 @@ fn setup_thread_pool(thread_count: Option<usize>, quiet: bool) -> Result<(), Mon
     Ok(())
 }
 
+fn gif_render_mode(args: &Args) -> GifRenderMode {
+    if args.braille {
+        GifRenderMode::Braille
+    } else if args.blocks {
+        GifRenderMode::Blocks
+    } else {
+        GifRenderMode::Text
+    }
+}
+
 fn calculate_gif_dimensions(
     args: &Args, 
     gif_width: u32, 
@@ -438,8 +436,7 @@ fn calculate_gif_dimensions(
         let target_gif_width = args.width.unwrap_or(gif_width);
         let target_gif_height = args.height.unwrap_or(gif_height);
         
-        let char_width_pixels = args.font_size * 0.5; 
-        let char_height_pixels = args.font_size;
+        let (char_width_pixels, char_height_pixels) = gif_cell_size(args.font_size, gif_render_mode(args))?;
         
         if char_width_pixels <= 0.0 || char_height_pixels <= 0.0 {
             return Err(MonochoraError::InvalidFontSize { size: args.font_size });
@@ -640,6 +637,7 @@ async fn handle_gif_output(
     let mut options = AsciiGifOutputOptions::default();
     options.font_size = args.font_size;
     options.colored = args.colored; 
+    options.render_mode = gif_render_mode(args);
     
     if args.black_on_white {
         options.bg_color = image::Rgb([255, 255, 255]); 

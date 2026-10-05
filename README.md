@@ -288,6 +288,7 @@ Half-block mode (`--blocks`) draws each character cell as two pixels instead of 
 - **`--invert`**: Inverts the colors (or the gray levels)
 - **Transparency**: Transparent pixels show your terminal's own background
 - **Terminal support**: Requires a terminal with 24-bit color support
+- **GIF output**: With `--gif-output`, each cell is drawn as two solid squares of color, and every frame gets its own 256-color palette so photo colors are kept. `--font-size` sets the cell height (default 14, giving 7x14 pixel cells)
 
 ### Half-Block Examples
 
@@ -304,6 +305,9 @@ monochora -i animation.gif --blocks -c -w 160 --speed 0.8
 # Responsive half-block playback that follows terminal resizes
 monochora -i animation.gif --blocks -c --responsive --watch-terminal
 
+# Save as a half-block GIF
+monochora -i animation.gif --blocks -c --gif-output blocks.gif
+
 # Save half-block frames to a text file
 monochora -i animation.gif --blocks -c -o ./blocks.txt
 ```
@@ -317,6 +321,7 @@ Braille mode (`--braille`) draws each character cell as a braille character with
 - **`--invert`**: Lights the dots where the image is dark instead
 - **Transparency**: Transparent pixels leave their dots off
 - **Terminal support**: Needs a font with braille characters (most terminals fall back to one automatically)
+- **GIF output**: With `--gif-output`, each lit dot is drawn as a small round dot. `--font-size` sets the cell height (default 14, giving 7x14 pixel cells)
 
 ### Braille Examples
 
@@ -332,6 +337,9 @@ monochora -i sketch.png --braille --invert --dither floyd-steinberg
 
 # Responsive braille playback that follows terminal resizes
 monochora -i animation.gif --braille -c --responsive --watch-terminal
+
+# Save as a braille GIF with bigger cells
+monochora -i animation.gif --braille -c --dither floyd-steinberg --font-size 20 --gif-output braille.gif
 
 # Save braille frames to a text file
 monochora -i animation.gif --braille --dither jarvis -o ./braille.txt
@@ -557,13 +565,11 @@ Speed control options are mutually exclusive:
 
 - `--braille` cannot be combined with `--blocks`
 - `--braille` cannot be combined with character set options (`--simple`, `--charset`, `--charset-file`)
-- `--braille` cannot be used with `--gif-output`
 
 ### Half-Block Mode Restrictions
 
 - `--blocks` cannot be combined with `--dither`
 - `--blocks` cannot be combined with character set options (`--simple`, `--charset`, `--charset-file`)
-- `--blocks` cannot be used with `--gif-output`
 
 ### Background Color Options
 
@@ -579,6 +585,7 @@ Speed control options are mutually exclusive:
 ### Font Size
 
 - `--font-size` only applies to GIF output mode
+- With `--blocks` or `--braille`, it sets the height of each cell in pixels
 - Valid range: 0.1 to 100.0
 - Default: 14.0 for optimal quality/performance balance
 

@@ -1,4 +1,6 @@
 use crate::{MonochoraError, Result};
+use crate::converter::BRAILLE_DOT_BITS;
+use crate::html::{parse_line, Cell};
 use gif::{Encoder, Frame, Repeat};
 use image::{Rgb, RgbImage};
 use imageproc::drawing::draw_text_mut;
@@ -6,6 +8,7 @@ use imageproc::pixelops::weighted_sum;
 use rusttype::{point, Font, Scale};
 use std::borrow::Cow;
 use std::fs::File;
+use std::io::BufWriter;
 use std::path::Path;
 use std::sync::Arc;
 use rayon::prelude::*;
@@ -21,6 +24,17 @@ const DEFAULT_PADDING: u32 = 20;
 const MAX_PALETTE_COLORS: usize = 256;
 const DEFAULT_FRAME_DELAY: u16 = 100;
 const MIN_FRAME_DELAY: u16 = 1;
+const GIF_QUANTIZE_SPEED: i32 = 10;
+const BRAILLE_BASE: u32 = 0x2800;
+const EMBEDDED_FONT: &[u8] = include_bytes!("../resources/DejaVuSansMono.ttf");
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum GifRenderMode {
+    #[default]
+    Text,
+    Blocks,
+    Braille,
+}
 
 #[repr(C)]
 pub struct AsciiGifOutputOptions {
@@ -30,6 +44,7 @@ pub struct AsciiGifOutputOptions {
     pub line_height_multiplier: f32,
     pub preserve_input_dimensions: bool,
     pub colored: bool,
+    pub render_mode: GifRenderMode,
 }
 
 impl Default for AsciiGifOutputOptions {
@@ -41,6 +56,7 @@ impl Default for AsciiGifOutputOptions {
             line_height_multiplier: 1.0,
             preserve_input_dimensions: true,
             colored: false,
+            render_mode: GifRenderMode::Text,
         }
     }
 }
@@ -270,7 +286,7 @@ fn render_ascii_to_image_colored(
     for (line_idx, line) in ascii_frame.iter().enumerate() {
         let y = (line_idx as f32 * line_height) as u32;
         
-        if y >= height.saturating_sub(scale.y as u32) {
+        if y + scale.y as u32 > height {
             break;
         }
         
@@ -476,7 +492,7 @@ fn render_ascii_to_image(
         for (line_idx, line) in ascii_frame.iter().enumerate() {
             let y = (line_idx as f32 * line_height) as u32;
             
-            if y < height.saturating_sub(scale.y as u32) {
+            if y + scale.y as u32 <= height {
                 draw_text_mut(
                     &mut image,
                     options.text_color,
@@ -618,9 +634,12 @@ pub fn ascii_frames_to_gif_with_dimensions<P: AsRef<Path>>(
         return Err(MonochoraError::Config("No frame delays provided".to_string()));
     }
     
-    let font_data = include_bytes!("../resources/DejaVuSansMono.ttf");
+    if options.render_mode != GifRenderMode::Text {
+        return cell_frames_to_gif(ascii_frames, frame_delays, loop_count, output_path.as_ref(), options);
+    }
+    
     let font = Arc::new(
-        Font::try_from_bytes(font_data as &[u8])
+        Font::try_from_bytes(EMBEDDED_FONT)
             .ok_or_else(|| MonochoraError::FontLoad("Failed to load embedded font".to_string()))?
     );
 
@@ -685,13 +704,7 @@ pub fn ascii_frames_to_gif_with_dimensions<P: AsRef<Path>>(
                     options
                 )?;
 
-                let frame_delay = if frame_idx < frame_delays.len() {
-                    frame_delays[frame_idx]
-                } else if !frame_delays.is_empty() {
-                    frame_delays[0]
-                } else {
-                    DEFAULT_FRAME_DELAY
-                };
+                let frame_delay = frame_delay_at(frame_delays, frame_idx);
 
                 let indexed_data = quantize_image(&image, &palette, &color_cache)?;
                 Ok((indexed_data, frame_delay))
@@ -721,4 +734,176 @@ pub fn ascii_frames_to_gif_with_dimensions<P: AsRef<Path>>(
 
     debug!("Successfully wrote {} frames to GIF", ascii_frames.len());
     Ok(())
+}
+
+pub fn gif_cell_size(font_size: f32, render_mode: GifRenderMode) -> Result<(f32, f32)> {
+    match render_mode {
+        GifRenderMode::Text => {
+            let font = Font::try_from_bytes(EMBEDDED_FONT)
+                .ok_or_else(|| MonochoraError::FontLoad("Failed to load embedded font".to_string()))?;
+            let advance = font.glyph('M').scaled(Scale::uniform(font_size)).h_metrics().advance_width;
+            Ok((advance, font_size))
+        }
+        GifRenderMode::Blocks | GifRenderMode::Braille => {
+            let (width, height) = block_cell_size(font_size);
+            Ok((width as f32, height as f32))
+        }
+    }
+}
+
+fn block_cell_size(font_size: f32) -> (u32, u32) {
+    let width = ((font_size * 0.5).round() as u32).max(1);
+    (width, width * 2)
+}
+
+fn frame_delay_at(frame_delays: &[u16], frame_idx: usize) -> u16 {
+    if frame_idx < frame_delays.len() {
+        frame_delays[frame_idx]
+    } else if !frame_delays.is_empty() {
+        frame_delays[0]
+    } else {
+        DEFAULT_FRAME_DELAY
+    }
+}
+
+fn cell_frames_to_gif(
+    ascii_frames: &[Vec<String>],
+    frame_delays: &[u16],
+    loop_count: u16,
+    output_path: &Path,
+    options: &AsciiGifOutputOptions,
+) -> Result<()> {
+    let text_color = options.text_color.0;
+    let cols = ascii_frames
+        .par_iter()
+        .flat_map_iter(|frame| frame.iter().map(|line| parse_line(line, text_color).len()))
+        .max()
+        .unwrap_or(0) as u32;
+    let rows = ascii_frames.iter().map(|frame| frame.len()).max().unwrap_or(0) as u32;
+    
+    if cols == 0 || rows == 0 {
+        return Err(MonochoraError::Config("ASCII frames contain no content".to_string()));
+    }
+    
+    let (cell_width, cell_height) = block_cell_size(options.font_size);
+    let width = cols * cell_width;
+    let height = rows * cell_height;
+    
+    if width > u16::MAX as u32 || height > u16::MAX as u32 {
+        return Err(MonochoraError::InvalidDimensions { width, height });
+    }
+    
+    let file = File::create(output_path).map_err(MonochoraError::Io)?;
+    let mut encoder = Encoder::new(BufWriter::new(file), width as u16, height as u16, &options.bg_color.0)
+        .map_err(|e| MonochoraError::GifDecode(format!("Failed to create GIF encoder: {}", e)))?;
+    
+    let repeat_setting = if loop_count == 0 {
+        Repeat::Infinite
+    } else {
+        Repeat::Finite(loop_count)
+    };
+    encoder.set_repeat(repeat_setting)
+        .map_err(|e| MonochoraError::GifDecode(format!("Failed to set GIF repeat: {}", e)))?;
+    
+    debug!("Rendering {} {:?} frames in parallel", ascii_frames.len(), options.render_mode);
+    
+    let chunk_size = rayon::current_num_threads().max(1);
+    
+    for chunk_start in (0..ascii_frames.len()).step_by(chunk_size) {
+        let chunk_end = (chunk_start + chunk_size).min(ascii_frames.len());
+        
+        let frames: Vec<Frame<'static>> = (chunk_start..chunk_end)
+            .into_par_iter()
+            .map(|frame_idx| {
+                let rgb = render_cells_to_rgb(&ascii_frames[frame_idx], width, height, cell_width, options);
+                let mut frame = Frame::from_rgb_speed(width as u16, height as u16, &rgb, GIF_QUANTIZE_SPEED);
+                frame.delay = (frame_delay_at(frame_delays, frame_idx) / 10).max(MIN_FRAME_DELAY);
+                frame
+            })
+            .collect();
+        
+        for (frame_idx, frame) in (chunk_start..).zip(&frames) {
+            encoder.write_frame(frame)
+                .map_err(|e| MonochoraError::GifDecode(format!("Failed to write frame {}: {}", frame_idx, e)))?;
+        }
+    }
+    
+    debug!("Successfully wrote {} frames to GIF", ascii_frames.len());
+    Ok(())
+}
+
+fn render_cells_to_rgb(
+    frame: &[String],
+    width: u32,
+    height: u32,
+    cell_width: u32,
+    options: &AsciiGifOutputOptions,
+) -> Vec<u8> {
+    let background = options.bg_color.0;
+    let text_color = options.text_color.0;
+    let cell_height = cell_width * 2;
+    let mut rgb: Vec<u8> = background.repeat((width * height) as usize);
+    
+    for (row, line) in frame.iter().enumerate() {
+        let y0 = row as u32 * cell_height;
+        
+        for (col, cell) in parse_line(line, text_color).into_iter().enumerate() {
+            let x0 = col as u32 * cell_width;
+            
+            match cell {
+                Cell::Block { top, bottom } => {
+                    fill_rect(&mut rgb, width, x0, y0, cell_width, cell_width, top.unwrap_or(background));
+                    fill_rect(&mut rgb, width, x0, y0 + cell_width, cell_width, cell_width, bottom.unwrap_or(background));
+                }
+                Cell::Braille { ch, fg } => {
+                    draw_braille_dots(&mut rgb, width, x0, y0, cell_width, ch, fg.unwrap_or(text_color));
+                }
+                Cell::Text { .. } => {}
+            }
+        }
+    }
+    
+    rgb
+}
+
+fn fill_rect(rgb: &mut [u8], image_width: u32, x0: u32, y0: u32, width: u32, height: u32, color: [u8; 3]) {
+    for y in y0..y0 + height {
+        let start = ((y * image_width + x0) * 3) as usize;
+        let (pixels, _) = rgb[start..start + (width * 3) as usize].as_chunks_mut::<3>();
+        for pixel in pixels {
+            *pixel = color;
+        }
+    }
+}
+
+fn draw_braille_dots(rgb: &mut [u8], image_width: u32, x0: u32, y0: u32, cell_width: u32, ch: char, color: [u8; 3]) {
+    let bits = (ch as u32).wrapping_sub(BRAILLE_BASE) as u8;
+    let pitch = cell_width as f32 / 2.0;
+    let radius = (pitch * 0.4).max(0.5);
+    
+    for (dot_row, row_bits) in BRAILLE_DOT_BITS.iter().enumerate() {
+        for (dot_col, &bit) in row_bits.iter().enumerate() {
+            if bits & bit == 0 {
+                continue;
+            }
+            
+            let center_x = x0 as f32 + (dot_col as f32 + 0.5) * pitch;
+            let center_y = y0 as f32 + (dot_row as f32 + 0.5) * pitch;
+            let min_x = ((center_x - radius).floor().max(x0 as f32)) as u32;
+            let max_x = ((center_x + radius).ceil() as u32).min(x0 + cell_width);
+            let min_y = ((center_y - radius).floor().max(y0 as f32)) as u32;
+            let max_y = ((center_y + radius).ceil() as u32).min(y0 + cell_width * 2);
+            
+            for y in min_y..max_y {
+                for x in min_x..max_x {
+                    let dx = x as f32 + 0.5 - center_x;
+                    let dy = y as f32 + 0.5 - center_y;
+                    if dx * dx + dy * dy <= radius * radius {
+                        let index = ((y * image_width + x) * 3) as usize;
+                        rgb[index..index + 3].copy_from_slice(&color);
+                    }
+                }
+            }
+        }
+    }
 }

@@ -193,7 +193,7 @@ impl Default for HtmlOutputOptions {
 }
 
 #[derive(Clone, Copy, PartialEq)]
-enum Cell {
+pub(crate) enum Cell {
     Text { ch: char, fg: Option<[u8; 3]>, bg: Option<[u8; 3]> },
     Braille { ch: char, fg: Option<[u8; 3]> },
     Block { top: Option<[u8; 3]>, bottom: Option<[u8; 3]> },
@@ -285,7 +285,7 @@ fn render_html_page(
         .replace("__DATA__", &data)
 }
 
-fn parse_line(line: &str, text_color: [u8; 3]) -> Vec<Cell> {
+pub(crate) fn parse_line(line: &str, text_color: [u8; 3]) -> Vec<Cell> {
     let mut cells = Vec::new();
     let mut fg: Option<[u8; 3]> = None;
     let mut bg: Option<[u8; 3]> = None;

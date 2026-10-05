@@ -5,7 +5,7 @@ use crate::{MonochoraError, Result};
 const COLORED_CHAR_CAPACITY: usize = 20;
 const BLOCK_CHAR_CAPACITY: usize = 40;
 const BRAILLE_BASE: u32 = 0x2800;
-const BRAILLE_DOT_BITS: [[u8; 2]; 4] = [[0x01, 0x08], [0x02, 0x10], [0x04, 0x20], [0x40, 0x80]];
+pub(crate) const BRAILLE_DOT_BITS: [[u8; 2]; 4] = [[0x01, 0x08], [0x02, 0x10], [0x04, 0x20], [0x40, 0x80]];
 
 static SIMPLE_CHARS: &[char] = &[' ', '.', ':', '-', '=', '+', '*', '#', '%', '@'];
 static DETAILED_CHARS: &[char] = &[
