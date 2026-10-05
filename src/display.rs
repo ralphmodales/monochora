@@ -1,17 +1,18 @@
 use crate::{MonochoraError, Result};
 use crossterm::{
     cursor::{Hide, MoveTo, Show},
-    execute,
+    execute, queue,
     terminal::{Clear, ClearType, size},
     event::{poll, read, Event, KeyCode},
 };
-use rayon::prelude::*;
-use std::io::{self, Write};
+use std::io::{self, BufWriter, Write};
 use std::time::Duration;
-use tokio::time::sleep;
+use tokio::time::{sleep_until, timeout, Instant};
 use tracing::{debug, warn};
 use crate::terminal_watcher::{ResponsiveFrameManager, TerminalDimensions};
 use tokio::sync::watch;
+
+const RESIZE_SETTLE_TIME: Duration = Duration::from_millis(150);
 
 pub fn get_terminal_size() -> Result<(u32, u32)> {
     let (cols, rows) = size()
@@ -60,36 +61,56 @@ fn validate_animation_input(
     Ok(())
 }
 
+fn render_frame<W: Write>(out: &mut W, buffer: &mut Vec<u8>, frame: &[String]) -> io::Result<()> {
+    buffer.clear();
+    queue!(buffer, MoveTo(0, 0))?;
+    
+    for line in frame {
+        queue!(buffer, Clear(ClearType::CurrentLine))?;
+        buffer.extend_from_slice(line.as_bytes());
+        buffer.push(b'\n');
+    }
+    
+    queue!(buffer, Clear(ClearType::FromCursorDown))?;
+    out.write_all(buffer)?;
+    out.flush()
+}
+
+async fn wait_for_resize_to_settle(resize_rx: &mut watch::Receiver<TerminalDimensions>) -> TerminalDimensions {
+    while let Ok(Ok(())) = timeout(RESIZE_SETTLE_TIME, resize_rx.changed()).await {}
+    *resize_rx.borrow()
+}
+
 pub async fn display_responsive_ascii_animation(
     frame_manager: &mut ResponsiveFrameManager,
     mut resize_rx: watch::Receiver<TerminalDimensions>,
     loop_count: u16,
 ) -> Result<()> {
     let mut stdout = io::stdout();
-    execute!(stdout, Hide)?;
+    let mut buffer = Vec::new();
+    execute!(stdout, Hide, Clear(ClearType::All))?;
 
     let iterations = if loop_count == 0 { usize::MAX } else { loop_count as usize };
     let mut current_iteration = 0;
+    let mut next_frame_at = Instant::now();
 
     'outer: while current_iteration < iterations {
-        let frames = frame_manager.get_frames()?.to_vec(); 
-        let delays = frame_manager.get_frame_delays().to_vec(); 
+        let frame_count = frame_manager.get_frames()?.len();
 
-        for (frame_idx, frame) in frames.iter().enumerate() {
+        for frame_idx in 0..frame_count {
+            let delay = Duration::from_millis(frame_manager.get_frame_delays()[frame_idx] as u64);
+            next_frame_at = (next_frame_at + delay).max(Instant::now());
+
             tokio::select! {
-                _ = resize_rx.changed() => {
-                    let new_dims = *resize_rx.borrow();
+                Ok(()) = resize_rx.changed() => {
+                    let new_dims = wait_for_resize_to_settle(&mut resize_rx).await;
                     if frame_manager.update_dimensions(new_dims) {
+                        next_frame_at = Instant::now();
                         continue 'outer;
                     }
                 }
-                _ = sleep(Duration::from_millis(delays[frame_idx] as u64)) => {
-                    execute!(stdout, Clear(ClearType::All), MoveTo(0, 0))?;
-                    
-                    for line in frame {
-                        writeln!(stdout, "{}", line)?;
-                    }
-                    stdout.flush()?;
+                _ = sleep_until(next_frame_at) => {
+                    render_frame(&mut stdout, &mut buffer, &frame_manager.get_frames()?[frame_idx])?;
 
                     if poll(Duration::from_millis(0))? {
                         if let Ok(Event::Key(key)) = read() {
@@ -118,8 +139,9 @@ pub async fn display_ascii_animation(
     validate_animation_input(frames, frame_delays, loop_count)?;
     
     let mut stdout = io::stdout();
+    let mut buffer = Vec::new();
     
-    execute!(stdout, Hide)
+    execute!(stdout, Hide, Clear(ClearType::All))
         .map_err(|e| MonochoraError::Terminal(format!("Failed to hide cursor: {}", e)))?;
     
     let iterations = if loop_count == 0 {
@@ -129,23 +151,12 @@ pub async fn display_ascii_animation(
     };
     
     let mut current_iteration = 0;
+    let mut next_frame_at = Instant::now();
     
     'outer: while current_iteration < iterations {
         for (frame_idx, frame) in frames.iter().enumerate() {
-            execute!(stdout, Clear(ClearType::All), MoveTo(0, 0))
-                .map_err(|e| MonochoraError::Terminal(format!("Failed to clear screen: {}", e)))?;
-            
-            for (line_idx, line) in frame.iter().enumerate() {
-                match writeln!(stdout, "{}", line) {
-                    Ok(_) => {},
-                    Err(e) => {
-                        warn!("Failed to write line {} of frame {}: {}", line_idx, frame_idx, e);
-                    }
-                }
-            }
-            
-            stdout.flush()
-                .map_err(|e| MonochoraError::Terminal(format!("Failed to flush stdout: {}", e)))?;
+            render_frame(&mut stdout, &mut buffer, frame)
+                .map_err(|e| MonochoraError::Terminal(format!("Failed to write frame {}: {}", frame_idx, e)))?;
             
             // Calculate frame delay
             let delay = if frame_idx < frame_delays.len() {
@@ -158,7 +169,8 @@ pub async fn display_ascii_animation(
                 100 
             };
             
-            sleep(Duration::from_millis(delay as u64)).await;
+            next_frame_at = (next_frame_at + Duration::from_millis(delay as u64)).max(Instant::now());
+            sleep_until(next_frame_at).await;
             
             match poll(Duration::from_millis(0)) {
                 Ok(true) => {
@@ -175,6 +187,7 @@ pub async fn display_ascii_animation(
                                         Ok(_) => debug!("Animation resumed"),
                                         Err(e) => warn!("Failed to read resume input: {}", e),
                                     }
+                                    next_frame_at = Instant::now();
                                 }
                                 _ => {
                                 }
@@ -198,7 +211,8 @@ pub async fn display_ascii_animation(
         current_iteration += 1;
         
         if current_iteration < iterations {
-            sleep(Duration::from_millis(50)).await;
+            next_frame_at += Duration::from_millis(50);
+            sleep_until(next_frame_at).await;
         }
     }
     
@@ -240,39 +254,12 @@ pub fn save_ascii_to_file<P: AsRef<std::path::Path>>(
         .map_err(|e| MonochoraError::Io(e))?;
     let mut writer = BufWriter::new(file);
     
-    let separator = match String::from_utf8(vec![b'='; 80]) {
-        Ok(s) => s,
-        Err(_) => "=".repeat(80), 
-    };
+    let separator = "=".repeat(80);
     
     debug!("Processing {} frames for file save", frames.len());
     
-    let frame_results: Result<Vec<String>> = frames
-        .par_iter()
-        .enumerate()
-        .map(|(i, frame)| -> Result<String> {
-            let mut frame_content = String::new();
-            
-            frame_content.push_str(&separator);
-            frame_content.push('\n');
-            frame_content.push_str(&format!("Frame {}\n", i + 1));
-            frame_content.push_str(&separator);
-            frame_content.push('\n');
-            
-            for line in frame {
-                frame_content.push_str(line);
-                frame_content.push('\n');
-            }
-            frame_content.push('\n');
-            
-            Ok(frame_content)
-        })
-        .collect();
-    
-    let frame_strings = frame_results?;
-    
-    for (idx, frame_string) in frame_strings.iter().enumerate() {
-        write!(writer, "{}", frame_string)
+    for (idx, frame) in frames.iter().enumerate() {
+        write_text_frame(&mut writer, idx, frame, &separator)
             .map_err(|e| MonochoraError::Io(
                 std::io::Error::new(
                     std::io::ErrorKind::WriteZero,
@@ -281,7 +268,6 @@ pub fn save_ascii_to_file<P: AsRef<std::path::Path>>(
             ))?;
     }
     
-    use std::io::BufWriter;
     match writer.into_inner() {
         Ok(file) => {
             file.sync_all()
@@ -299,4 +285,17 @@ pub fn save_ascii_to_file<P: AsRef<std::path::Path>>(
     
     debug!("Successfully saved {} frames to {}", frames.len(), path_ref.display());
     Ok(())
+}
+
+fn write_text_frame<W: Write>(writer: &mut W, idx: usize, frame: &[String], separator: &str) -> io::Result<()> {
+    writeln!(writer, "{}", separator)?;
+    writeln!(writer, "Frame {}", idx + 1)?;
+    writeln!(writer, "{}", separator)?;
+    
+    for line in frame {
+        writer.write_all(line.as_bytes())?;
+        writer.write_all(b"\n")?;
+    }
+    
+    writer.write_all(b"\n")
 }

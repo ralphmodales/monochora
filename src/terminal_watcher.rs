@@ -113,6 +113,24 @@ impl Drop for TerminalWatcher {
     }
 }
 
+pub fn responsive_config(
+    config_template: &AsciiConverterConfig,
+    dimensions: TerminalDimensions,
+) -> Result<AsciiConverterConfig> {
+    let target_width = dimensions.width.saturating_sub(2);
+    let target_height = dimensions.height.saturating_sub(4);
+
+    if target_width == 0 || target_height == 0 {
+        return Err(MonochoraError::Terminal("Terminal too small for display".to_string()));
+    }
+
+    let mut config = config_template.clone();
+    config.width = Some(target_width);
+    config.height = Some(target_height);
+    config.dithering_algorithm = None;
+    Ok(config)
+}
+
 pub struct ResponsiveFrameManager {
     gif_data: GifData,
     config_template: AsciiConverterConfig,
@@ -162,16 +180,7 @@ impl ResponsiveFrameManager {
     }
 
     fn regenerate_frames(&mut self) -> Result<()> {
-        let target_width = self.current_dimensions.width.saturating_sub(2);
-        let target_height = self.current_dimensions.height.saturating_sub(4);
-
-        if target_width == 0 || target_height == 0 {
-            return Err(MonochoraError::Terminal("Terminal too small for display".to_string()));
-        }
-
-        let mut config = self.config_template.clone();
-        config.width = Some(target_width);
-        config.height = Some(target_height);
+        let config = responsive_config(&self.config_template, self.current_dimensions)?;
 
         let new_frames: Result<Vec<Vec<String>>> = self.gif_data.frames
             .iter()

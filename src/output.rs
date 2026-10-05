@@ -2,7 +2,9 @@ use crate::{MonochoraError, Result};
 use gif::{Encoder, Frame, Repeat};
 use image::{Rgb, RgbImage};
 use imageproc::drawing::draw_text_mut;
-use rusttype::{Font, Scale};
+use imageproc::pixelops::weighted_sum;
+use rusttype::{point, Font, Scale};
+use std::borrow::Cow;
 use std::fs::File;
 use std::path::Path;
 use std::sync::Arc;
@@ -228,37 +230,23 @@ fn render_colored_line_to_image(
         return Ok(());
     }
     
-    let mut i = 0;
-    while i < colored_chars.len() {
-        let current_color = colored_chars[i].color;
-        let mut segment_chars = String::new();
-        let start_pos = i;
-        
-        while i < colored_chars.len() && colored_chars[i].color.0 == current_color.0 {
-            segment_chars.push(colored_chars[i].character);
-            i += 1;
+    let text: String = colored_chars.iter().map(|c| c.character).collect();
+    let offset = point(0.0, font.v_metrics(scale).ascent);
+    let image_width = image.width() as i32;
+    let image_height = image.height() as i32;
+    
+    for (glyph, colored_char) in font.layout(&text, scale, offset).zip(&colored_chars) {
+        if let Some(bb) = glyph.pixel_bounding_box() {
+            glyph.draw(|gx, gy, gv| {
+                let image_x = gx as i32 + bb.min.x;
+                let image_y = gy as i32 + bb.min.y + y_position as i32;
+                
+                if (0..image_width).contains(&image_x) && (0..image_height).contains(&image_y) {
+                    let pixel = image.get_pixel_mut(image_x as u32, image_y as u32);
+                    *pixel = weighted_sum(*pixel, colored_char.color, 1.0 - gv, gv);
+                }
+            });
         }
-        
-        let mut positioned_line = vec![' '; colored_chars.len()];
-        let segment_char_vec: Vec<char> = segment_chars.chars().collect();
-        
-        for (idx, &ch) in segment_char_vec.iter().enumerate() {
-            if start_pos + idx < positioned_line.len() {
-                positioned_line[start_pos + idx] = ch;
-            }
-        }
-        
-        let positioned_text: String = positioned_line.into_iter().collect();
-        
-        draw_text_mut(
-            image,
-            current_color,
-            0,
-            y_position as i32,
-            scale,
-            font,
-            &positioned_text,
-        );
     }
     
     Ok(())
@@ -442,14 +430,27 @@ fn quantize_image(image: &RgbImage, palette: &[u8], cache: &ColorCache) -> Resul
         return Err(MonochoraError::Config("Empty color palette".to_string()));
     }
     
-    let pixels: Vec<&Rgb<u8>> = image.pixels().collect();
-    let indexed_data: Vec<u8> = pixels
-        .par_iter()
-        .map(|pixel| {
-            let rgb = [pixel[0], pixel[1], pixel[2]];
-            find_closest_color(rgb, palette, cache)
-        })
-        .collect();
+    let width = image.width() as usize;
+    let mut indexed_data = vec![0u8; width * image.height() as usize];
+    
+    indexed_data
+        .par_chunks_mut(width)
+        .zip(image.as_raw().par_chunks(width * 3))
+        .for_each(|(indexed_row, pixel_row)| {
+            let mut last: Option<([u8; 3], u8)> = None;
+            
+            for (index, pixel) in indexed_row.iter_mut().zip(pixel_row.chunks_exact(3)) {
+                let rgb = [pixel[0], pixel[1], pixel[2]];
+                *index = match last {
+                    Some((last_rgb, last_index)) if last_rgb == rgb => last_index,
+                    _ => {
+                        let closest = find_closest_color(rgb, palette, cache);
+                        last = Some((rgb, closest));
+                        closest
+                    }
+                };
+            }
+        });
     
     Ok(indexed_data)
 }
@@ -667,54 +668,55 @@ pub fn ascii_frames_to_gif_with_dimensions<P: AsRef<Path>>(
     
     debug!("Rendering {} frames in parallel (colored: {})", ascii_frames.len(), options.colored);
     
-    let frame_results: Result<Vec<(Vec<u8>, u16)>> = ascii_frames
-        .par_iter()
-        .enumerate()
-        .map(|(frame_idx, ascii_frame)| -> Result<(Vec<u8>, u16)> {
-            let image = render_ascii_to_image(
-                ascii_frame, 
-                width, 
-                height, 
-                scale, 
-                &font, 
-                options
-            )?;
+    let chunk_size = rayon::current_num_threads().max(1);
+    
+    for chunk_start in (0..ascii_frames.len()).step_by(chunk_size) {
+        let chunk_end = (chunk_start + chunk_size).min(ascii_frames.len());
+        
+        let frame_results: Result<Vec<(Vec<u8>, u16)>> = (chunk_start..chunk_end)
+            .into_par_iter()
+            .map(|frame_idx| -> Result<(Vec<u8>, u16)> {
+                let image = render_ascii_to_image(
+                    &ascii_frames[frame_idx], 
+                    width, 
+                    height, 
+                    scale, 
+                    &font, 
+                    options
+                )?;
 
-            let frame_delay = if frame_idx < frame_delays.len() {
-                frame_delays[frame_idx]
-            } else if !frame_delays.is_empty() {
-                frame_delays[0]
-            } else {
-                DEFAULT_FRAME_DELAY
+                let frame_delay = if frame_idx < frame_delays.len() {
+                    frame_delays[frame_idx]
+                } else if !frame_delays.is_empty() {
+                    frame_delays[0]
+                } else {
+                    DEFAULT_FRAME_DELAY
+                };
+
+                let indexed_data = quantize_image(&image, &palette, &color_cache)?;
+                Ok((indexed_data, frame_delay))
+            })
+            .collect();
+        
+        for (frame_idx, (indexed_data, frame_delay)) in (chunk_start..).zip(frame_results?) {
+            if indexed_data.len() != (width * height) as usize {
+                return Err(MonochoraError::GifDecode(
+                    format!("Frame {} has incorrect data size: expected {}, got {}", 
+                        frame_idx, width * height, indexed_data.len())
+                ));
+            }
+            
+            let frame = Frame {
+                width: width as u16,
+                height: height as u16,
+                buffer: Cow::Borrowed(&indexed_data),
+                delay: (frame_delay / 10).max(MIN_FRAME_DELAY),
+                ..Frame::default()
             };
-
-            let indexed_data = quantize_image(&image, &palette, &color_cache)?;
-            Ok((indexed_data, frame_delay))
-        })
-        .collect();
-    
-    let rendered_frames = frame_results?;
-    
-    for (frame_idx, (indexed_data, frame_delay)) in rendered_frames.into_iter().enumerate() {
-        if indexed_data.len() != (width * height) as usize {
-            return Err(MonochoraError::GifDecode(
-                format!("Frame {} has incorrect data size: expected {}, got {}", 
-                    frame_idx, width * height, indexed_data.len())
-            ));
+            
+            encoder.write_frame(&frame)
+                .map_err(|e| MonochoraError::GifDecode(format!("Failed to write frame {}: {}", frame_idx, e)))?;
         }
-        
-        let mut frame = Frame::from_palette_pixels(
-            width as u16,
-            height as u16,
-            &indexed_data,
-            &palette,
-            None,
-        );
-
-        frame.delay = (frame_delay / 10).max(MIN_FRAME_DELAY);
-        
-        encoder.write_frame(&frame)
-            .map_err(|e| MonochoraError::GifDecode(format!("Failed to write frame {}: {}", frame_idx, e)))?;
     }
 
     debug!("Successfully wrote {} frames to GIF", ascii_frames.len());

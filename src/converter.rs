@@ -1,7 +1,8 @@
 use image::{GenericImageView, Rgba};
 use rayon::prelude::*;
 use crate::{MonochoraError, Result};
-use std::collections::HashMap;
+
+const COLORED_CHAR_CAPACITY: usize = 20;
 
 static SIMPLE_CHARS: &[char] = &[' ', '.', ':', '-', '=', '+', '*', '#', '%', '@'];
 static DETAILED_CHARS: &[char] = &[
@@ -150,7 +151,8 @@ fn get_dithering_kernel(algorithm: DitheringAlgorithm) -> Vec<DitheringKernel> {
 struct ErrorBuffer {
     width: u32,
     height: u32,
-    errors: HashMap<(u32, u32), f32>,
+    current_y: u32,
+    rows: [Vec<f32>; 3],
 }
 
 impl ErrorBuffer {
@@ -158,22 +160,34 @@ impl ErrorBuffer {
         Self {
             width,
             height,
-            errors: HashMap::new(),
+            current_y: 0,
+            rows: std::array::from_fn(|_| vec![0.0; width as usize]),
         }
     }
     
     fn add_error(&mut self, x: u32, y: u32, error: f32) {
-        if x < self.width && y < self.height {
-            *self.errors.entry((x, y)).or_insert(0.0) += error;
+        if x < self.width && y < self.height && y >= self.current_y {
+            if let Some(row) = self.rows.get_mut((y - self.current_y) as usize) {
+                row[x as usize] += error;
+            }
         }
     }
     
     fn get_error(&self, x: u32, y: u32) -> f32 {
-        self.errors.get(&(x, y)).copied().unwrap_or(0.0)
+        if y < self.current_y {
+            return 0.0;
+        }
+        self.rows
+            .get((y - self.current_y) as usize)
+            .and_then(|row| row.get(x as usize))
+            .copied()
+            .unwrap_or(0.0)
     }
     
-    fn clear_error(&mut self, x: u32, y: u32) {
-        self.errors.remove(&(x, y));
+    fn next_row(&mut self) {
+        self.rows.rotate_left(1);
+        self.rows[2].fill(0.0);
+        self.current_y += 1;
     }
 }
 
@@ -209,19 +223,15 @@ where
     }
 
     let kernel = get_dithering_kernel(dithering);
+    let columns = source_columns(target_width, img_width);
     let mut error_buffer = ErrorBuffer::new(target_width, target_height);
     let mut result = Vec::with_capacity(target_height as usize);
     
     for y in 0..target_height {
         let mut line = String::with_capacity(target_width as usize);
+        let img_y = source_row(y, target_height, img_height);
         
-        for x in 0..target_width {
-            let img_x = ((x as f64 / target_width as f64) * img_width as f64) as u32;
-            let img_y = ((y as f64 / target_height as f64) * img_height as f64) as u32;
-            
-            let img_x = img_x.min(img_width.saturating_sub(1));
-            let img_y = img_y.min(img_height.saturating_sub(1));
-            
+        for (x, &img_x) in (0..target_width).zip(columns.iter()) {
             let pixel = image.get_pixel(img_x, img_y);
             let [r, g, b, a] = pixel.0;
             
@@ -255,11 +265,10 @@ where
                 }
             }
             
-            error_buffer.clear_error(x, y);
-            
             line.push(ascii_char);
         }
         
+        error_buffer.next_row();
         result.push(line);
     }
     
@@ -298,19 +307,16 @@ where
     }
 
     let kernel = get_dithering_kernel(dithering);
+    let columns = source_columns(target_width, img_width);
     let mut error_buffer = ErrorBuffer::new(target_width, target_height);
     let mut result = Vec::with_capacity(target_height as usize);
     
     for y in 0..target_height {
-        let mut line = String::new();
+        let mut line = String::with_capacity(target_width as usize * COLORED_CHAR_CAPACITY);
+        let img_y = source_row(y, target_height, img_height);
+        let mut last_color = None;
         
-        for x in 0..target_width {
-            let img_x = ((x as f64 / target_width as f64) * img_width as f64) as u32;
-            let img_y = ((y as f64 / target_height as f64) * img_height as f64) as u32;
-            
-            let img_x = img_x.min(img_width.saturating_sub(1));
-            let img_y = img_y.min(img_height.saturating_sub(1));
-            
+        for (x, &img_x) in (0..target_width).zip(columns.iter()) {
             let pixel = image.get_pixel(img_x, img_y);
             let [r, g, b, a] = pixel.0;
             
@@ -343,12 +349,12 @@ where
                 }
             }
             
-            error_buffer.clear_error(x, y);
-            
-            line.push_str(&format!("\x1b[38;2;{};{};{}m{}", r, g, b, ascii_char));
+            push_colored_char(&mut line, &mut last_color, [r, g, b], ascii_char);
         }
         
         line.push_str("\x1b[0m");
+        line.shrink_to_fit();
+        error_buffer.next_row();
         result.push(line);
     }
     
@@ -487,18 +493,15 @@ where
         return Err(MonochoraError::InvalidDimensions { width: target_width, height: target_height });
     }
     
+    let columns = source_columns(target_width, img_width);
+    
     let result: Result<Vec<String>> = (0..target_height)
         .into_par_iter()
         .map(|y| {
             let mut line = String::with_capacity(target_width as usize);
+            let img_y = source_row(y, target_height, img_height);
             
-            for x in 0..target_width {
-                let img_x = ((x as f64 / target_width as f64) * img_width as f64) as u32;
-                let img_y = ((y as f64 / target_height as f64) * img_height as f64) as u32;
-                
-                let img_x = img_x.min(img_width.saturating_sub(1));
-                let img_y = img_y.min(img_height.saturating_sub(1));
-                
+            for &img_x in &columns {
                 let pixel = image.get_pixel(img_x, img_y);
                 let [r, g, b, a] = pixel.0;
                 
@@ -548,18 +551,16 @@ where
         return Err(MonochoraError::InvalidDimensions { width: target_width, height: target_height });
     }
     
+    let columns = source_columns(target_width, img_width);
+    
     let result: Result<Vec<String>> = (0..target_height)
         .into_par_iter()
         .map(|y| {
-            let mut line = String::new();
+            let mut line = String::with_capacity(target_width as usize * COLORED_CHAR_CAPACITY);
+            let img_y = source_row(y, target_height, img_height);
+            let mut last_color = None;
             
-            for x in 0..target_width {
-                let img_x = ((x as f64 / target_width as f64) * img_width as f64) as u32;
-                let img_y = ((y as f64 / target_height as f64) * img_height as f64) as u32;
-                
-                let img_x = img_x.min(img_width.saturating_sub(1));
-                let img_y = img_y.min(img_height.saturating_sub(1));
-                
+            for &img_x in &columns {
                 let pixel = image.get_pixel(img_x, img_y);
                 let [r, g, b, a] = pixel.0;
                 
@@ -576,15 +577,55 @@ where
                     .copied()
                     .unwrap_or(' '); 
                 
-                line.push_str(&format!("\x1b[38;2;{};{};{}m{}", r, g, b, ascii_char));
+                push_colored_char(&mut line, &mut last_color, [r, g, b], ascii_char);
             }
             
             line.push_str("\x1b[0m");
+            line.shrink_to_fit();
             Ok(line)
         })
         .collect();
     
     result
+}
+
+fn source_columns(target_width: u32, img_width: u32) -> Vec<u32> {
+    (0..target_width)
+        .map(|x| {
+            let img_x = ((x as f64 / target_width as f64) * img_width as f64) as u32;
+            img_x.min(img_width.saturating_sub(1))
+        })
+        .collect()
+}
+
+fn source_row(y: u32, target_height: u32, img_height: u32) -> u32 {
+    let img_y = ((y as f64 / target_height as f64) * img_height as f64) as u32;
+    img_y.min(img_height.saturating_sub(1))
+}
+
+fn push_u8(line: &mut String, value: u8) {
+    if value >= 100 {
+        line.push((b'0' + value / 100) as char);
+    }
+    if value >= 10 {
+        line.push((b'0' + value / 10 % 10) as char);
+    }
+    line.push((b'0' + value % 10) as char);
+}
+
+fn push_colored_char(line: &mut String, last_color: &mut Option<[u8; 3]>, color: [u8; 3], ch: char) {
+    if *last_color != Some(color) {
+        let [r, g, b] = color;
+        line.push_str("\x1b[38;2;");
+        push_u8(line, r);
+        line.push(';');
+        push_u8(line, g);
+        line.push(';');
+        push_u8(line, b);
+        line.push('m');
+        *last_color = Some(color);
+    }
+    line.push(ch);
 }
 
 fn calculate_brightness(r: u8, g: u8, b: u8) -> f32 {

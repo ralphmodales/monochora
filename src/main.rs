@@ -1,11 +1,11 @@
 use clap::Parser;
 use monochora::{
-    converter::{image_to_ascii, image_to_colored_ascii, AsciiConverterConfig, image_to_ascii_with_dithering, image_to_colored_ascii_with_dithering,
+    converter::{AsciiConverterConfig, image_to_ascii_with_dithering, image_to_colored_ascii_with_dithering,
         DitheringAlgorithm, list_dithering_algorithms},
     display::{display_ascii_animation, get_terminal_size, save_ascii_to_file, display_responsive_ascii_animation},
-    handler::decode_gif,
+    handler::{decode_gif, GifFrame, GifFrameReader},
     output::{ascii_frames_to_gif_with_dimensions, AsciiGifOutputOptions},
-    terminal_watcher::{TerminalWatcher, ResponsiveFrameManager, TerminalDimensions},
+    terminal_watcher::{TerminalWatcher, ResponsiveFrameManager, TerminalDimensions, responsive_config},
     web::get_input_path,
     MonochoraError,
 };
@@ -481,13 +481,25 @@ fn calculate_adjusted_frame_delays(
     adjusted_delays
 }
 
+fn convert_frame(
+    frame: &GifFrame,
+    config: &AsciiConverterConfig,
+    colored: bool,
+) -> Result<Vec<String>, MonochoraError> {
+    if colored {
+        image_to_colored_ascii_with_dithering(&frame.image, config)
+    } else {
+        image_to_ascii_with_dithering(&frame.image, config)
+    }
+}
+
 async fn process_ascii_conversion(
     args: &Args,
-    gif_data: &monochora::handler::GifData,
+    reader: &mut GifFrameReader,
     config: &AsciiConverterConfig,
 ) -> Result<(Vec<Vec<String>>, Vec<u16>), MonochoraError> {
     if !args.quiet {
-        info!("Converting {} frames to ASCII...", gif_data.frames.len());
+        info!("Converting frames to ASCII...");
         if let Some(dithering) = config.dithering_algorithm {
             if dithering != DitheringAlgorithm::None {
                 info!("Using {:?} dithering (this may take longer due to sequential processing)", dithering);
@@ -496,41 +508,24 @@ async fn process_ascii_conversion(
     }
     
     let start_time = std::time::Instant::now();
-   
-     let use_dithering = config.dithering_algorithm
-        .map(|d| d != DitheringAlgorithm::None)
-        .unwrap_or(false);
-
-    let results: Vec<Result<(Vec<String>, u16), MonochoraError>> = if use_dithering {
-        gif_data.frames
-            .iter()
-            .map(|frame| {
-                let ascii_frame = if args.colored {
-                    image_to_colored_ascii_with_dithering(&frame.image, config)
-                } else {
-                    image_to_ascii_with_dithering(&frame.image, config)
-                };
-                ascii_frame.map(|ascii| (ascii, frame.delay_time_ms))
-            })
-            .collect()
-    } else {
-        gif_data.frames
+    let batch_size = rayon::current_num_threads().max(1);
+    let mut ascii_frames = Vec::new();
+    let mut original_delays = Vec::new();
+    
+    loop {
+        let batch = reader.by_ref().take(batch_size).collect::<Result<Vec<GifFrame>, MonochoraError>>()?;
+        if batch.is_empty() {
+            break;
+        }
+        
+        let converted = batch
             .par_iter()
-            .map(|frame| {
-                let ascii_frame = if args.colored {
-                    image_to_colored_ascii(&frame.image, config)
-                } else {
-                    image_to_ascii(&frame.image, config)
-                };
-                ascii_frame.map(|ascii| (ascii, frame.delay_time_ms))
-            })
-            .collect()
-    };
-    
-    let results: Result<Vec<(Vec<String>, u16)>, MonochoraError> = results.into_iter().collect();
-    let results = results?;
-    
-    let (ascii_frames, original_delays): (Vec<_>, Vec<_>) = results.into_iter().unzip();
+            .map(|frame| convert_frame(frame, config, args.colored))
+            .collect::<Result<Vec<Vec<String>>, MonochoraError>>()?;
+        
+        ascii_frames.extend(converted);
+        original_delays.extend(batch.iter().map(|frame| frame.delay_time_ms));
+    }
     
     let adjusted_delays = calculate_adjusted_frame_delays(
         &original_delays,
@@ -551,7 +546,9 @@ async fn handle_gif_output(
     args: &Args,
     ascii_frames: &[Vec<String>],
     frame_delays: &[u16],
-    gif_data: &monochora::handler::GifData,
+    gif_width: u32,
+    gif_height: u32,
+    loop_count: u16,
 ) -> Result<(), MonochoraError> {
     let input = args.input.as_ref().unwrap();
     let output_path = generate_gif_output_path(input, &args.gif_output);
@@ -575,14 +572,14 @@ async fn handle_gif_output(
     }
     
     let target_dimensions = Some((
-        args.width.unwrap_or(gif_data.width),
-        args.height.unwrap_or(gif_data.height)
+        args.width.unwrap_or(gif_width),
+        args.height.unwrap_or(gif_height)
     ));
     
     ascii_frames_to_gif_with_dimensions(
         ascii_frames, 
         frame_delays, 
-        gif_data.loop_count, 
+        loop_count, 
         &output_path, 
         &options,
         target_dimensions
@@ -638,30 +635,47 @@ async fn handle_terminal_display(
 
 async fn handle_responsive_terminal_display(
     args: &Args,
-    _initial_frames: &[Vec<String>],
-    frame_delays: &[u16],
-    gif_data: &monochora::handler::GifData,
+    input_path: &std::path::Path,
     config: &AsciiConverterConfig,
 ) -> Result<(), MonochoraError> {
+    let gif_data = decode_gif(input_path)
+        .map_err(|e| {
+            error!("Failed to decode GIF: {}", e);
+            e
+        })?;
+    
+    if !args.quiet {
+        log_loaded_gif(gif_data.frames.len(), gif_data.width, gif_data.height, gif_data.loop_count);
+    }
+    
+    let original_delays: Vec<u16> = gif_data.frames.iter().map(|frame| frame.delay_time_ms).collect();
+    let frame_delays = calculate_adjusted_frame_delays(&original_delays, args.speed, args.fps, args.quiet);
+    let loop_count = gif_data.loop_count;
+    
     let initial_dims = TerminalDimensions::current()?;
     let mut frame_manager = ResponsiveFrameManager::new(
-        gif_data.clone(),
+        gif_data,
         config.clone(),
-        frame_delays.to_vec(),
+        frame_delays,
         initial_dims,
         args.colored,
     );
 
-    if args.watch_terminal {
-        let mut watcher = TerminalWatcher::new()?;
-        watcher.start_watching()?;
-        let resize_rx = watcher.get_receiver();
-        
-        display_responsive_ascii_animation(&mut frame_manager, resize_rx, gif_data.loop_count).await
-    } else {
-        let frames = frame_manager.get_frames()?;
-        display_ascii_animation(frames, frame_delays, gif_data.loop_count, true).await
-    }
+    let mut watcher = TerminalWatcher::new()?;
+    watcher.start_watching()?;
+    let resize_rx = watcher.get_receiver();
+    
+    display_responsive_ascii_animation(&mut frame_manager, resize_rx, loop_count).await
+}
+
+fn log_loaded_gif(frame_count: usize, width: u32, height: u32, loop_count: u16) {
+    info!(
+        "Loaded GIF: {} frames, {}x{}{}",
+        frame_count,
+        width,
+        height,
+        if loop_count == 0 { " (infinite loop)" } else { "" }
+    );
 }
 
 fn get_dithering_algorithm(args: &Args) -> Result<Option<DitheringAlgorithm>, MonochoraError> {
@@ -674,7 +688,7 @@ fn get_dithering_algorithm(args: &Args) -> Result<Option<DitheringAlgorithm>, Mo
     }
 }
 
-#[tokio::main]
+#[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
@@ -714,23 +728,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             e
         })?;
     
-    let gif_data = decode_gif(&input_path)
+    let mut reader = GifFrameReader::open(&input_path)
         .map_err(|e| {
             error!("Failed to decode GIF: {}", e);
             e
         })?;
-    
-    if !args.quiet {
-        info!(
-            "Loaded GIF: {} frames, {}x{}{}",
-            gif_data.frames.len(),
-            gif_data.width,
-            gif_data.height,
-            if gif_data.loop_count == 0 { " (infinite loop)" } else { "" }
-        );
-    }
+    let gif_width = reader.width();
+    let gif_height = reader.height();
 
-    let (ascii_width, ascii_height) = calculate_gif_dimensions(&args, gif_data.width, gif_data.height)?;
+    let (ascii_width, ascii_height) = calculate_gif_dimensions(&args, gif_width, gif_height)?;
 
     let custom_charset = get_custom_charset(&args)?;
     let dithering_algorithm = get_dithering_algorithm(&args)?;
@@ -757,19 +763,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    if args.responsive && args.watch_terminal {
+        drop(reader);
+        handle_responsive_terminal_display(&args, &input_path, &config).await?;
+        return Ok(());
+    }
 
-    let (ascii_frames, frame_delays) = process_ascii_conversion(&args, &gif_data, &config).await?;
+    let config = if args.responsive {
+        responsive_config(&config, TerminalDimensions::current()?)?
+    } else {
+        config
+    };
+
+    let (ascii_frames, frame_delays) = process_ascii_conversion(&args, &mut reader, &config).await?;
+    let loop_count = reader.loop_count()
+        .map_err(|e| {
+            error!("Failed to decode GIF: {}", e);
+            e
+        })?;
+    drop(reader);
+
+    if !args.quiet {
+        log_loaded_gif(ascii_frames.len(), gif_width, gif_height, loop_count);
+    }
 
     if args.gif_output.is_some() {
-        handle_gif_output(&args, &ascii_frames, &frame_delays, &gif_data).await?;
+        handle_gif_output(&args, &ascii_frames, &frame_delays, gif_width, gif_height, loop_count).await?;
     } else if args.save || args.output.is_some() {
         handle_text_output(&args, &ascii_frames).await?;
+    } else if args.responsive {
+        display_ascii_animation(&ascii_frames, &frame_delays, loop_count, true).await?;
     } else {
-        if args.responsive {
-            handle_responsive_terminal_display(&args, &ascii_frames, &frame_delays, &gif_data, &config).await?;
-        } else {
-            handle_terminal_display(&args, &ascii_frames, &frame_delays, gif_data.loop_count).await?;
-        }
+        handle_terminal_display(&args, &ascii_frames, &frame_delays, loop_count).await?;
     }
 
     Ok(())
