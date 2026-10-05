@@ -11,6 +11,7 @@ Monochora is a GIF to ASCII art converter written in Rust. It can transform GIF 
 - **Speed control** - Adjust animation speed with multipliers or target FPS
 - Save animations as text files or high-quality ASCII GIF files
 - Support for colored ASCII art (with ANSI color codes)
+- **Half-block mode** - Two pixels per character cell for sharp, image-like terminal output
 - **Customizable character sets** - Built-in sets, inline strings, or custom files
 - Multiple output options (terminal, text file, or GIF output)
 - Advanced dithering algorithms - Multiple error diffusion algorithms for enhanced ASCII art quality
@@ -88,6 +89,9 @@ monochora -i input.gif -o my_ascii.txt
 
 # Generate colored ASCII in terminal
 monochora -i input.gif -c
+
+# Half-block mode - two pixels per character cell, full color
+monochora -i input.gif --blocks -c
 
 # Download from URL and generate colored ASCII with speed control
 monochora -i "https://giffiles.alphacoders.com/220/220890.gif" -c -w 200 -H 100 --speed 1.5
@@ -183,6 +187,7 @@ Options:
       --list-charsets                    List available character sets and exit
       --list-dithering                   List available dithering algorithms and exit
       --dither <DITHER>                  Dithering algorithm (none, floyd-steinberg, atkinson, jarvis, stucki, burkes, sierra, two-row-sierra, sierra-lite)
+      --blocks                           Render with half-block characters (two pixels per character cell)
       --responsive                       Enable responsive mode - auto-adjust when terminal is resized
       --watch-terminal                   Watch terminal for resize events (requires responsive mode)
   -q, --quiet                            Suppress progress output
@@ -236,6 +241,35 @@ atkinson: Ideal for high-contrast images like text or logos.
 jarvis/stucki: Best for detailed images with smooth gradients.
 sierra-lite: Good for quick previews with acceptable quality.
 - **Colored Output**: Dithering works with both monochrome and colored ASCII output.
+
+## Half-Block Mode
+
+Half-block mode (`--blocks`) draws each character cell as two pixels instead of one character. Every cell shows `▀`, with the text color as the top pixel and the background color as the bottom pixel, so the output has twice the vertical detail of regular ASCII art at the same size.
+
+- **With `-c`**: Full color, closest to the original GIF
+- **Without `-c`**: Grayscale
+- **`--invert`**: Inverts the colors (or the gray levels)
+- **Transparency**: Transparent pixels show your terminal's own background
+- **Terminal support**: Requires a terminal with 24-bit color support
+
+### Half-Block Examples
+
+```bash
+# Full color half-block playback
+monochora -i animation.gif --blocks -c
+
+# Grayscale half-block playback
+monochora -i animation.gif --blocks
+
+# Half-block with custom width and speed control
+monochora -i animation.gif --blocks -c -w 160 --speed 0.8
+
+# Responsive half-block playback that follows terminal resizes
+monochora -i animation.gif --blocks -c --responsive --watch-terminal
+
+# Save half-block frames to a text file
+monochora -i animation.gif --blocks -c -o ./blocks.txt
+```
 
 ## Speed Control
 
@@ -423,6 +457,12 @@ Speed control options are mutually exclusive:
 - Cannot be used with file output options (`--save`, `--output`, `--gif-output`)
 - `--watch-terminal` requires `--responsive` mode to be enabled
 - Responsive features are not available during file generation
+
+### Half-Block Mode Restrictions
+
+- `--blocks` cannot be combined with `--dither`
+- `--blocks` cannot be combined with character set options (`--simple`, `--charset`, `--charset-file`)
+- `--blocks` cannot be used with `--gif-output`
 
 ### Background Color Options
 

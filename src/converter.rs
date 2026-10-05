@@ -3,6 +3,7 @@ use rayon::prelude::*;
 use crate::{MonochoraError, Result};
 
 const COLORED_CHAR_CAPACITY: usize = 20;
+const BLOCK_CHAR_CAPACITY: usize = 40;
 
 static SIMPLE_CHARS: &[char] = &[' ', '.', ':', '-', '=', '+', '*', '#', '%', '@'];
 static DETAILED_CHARS: &[char] = &[
@@ -589,6 +590,55 @@ where
     result
 }
 
+pub fn image_to_block_ascii<I>(
+    image: &I,
+    config: &AsciiConverterConfig,
+    colored: bool,
+) -> Result<Vec<String>>
+where
+    I: GenericImageView<Pixel = Rgba<u8>> + Sync,
+{
+    config.validate()?;
+    
+    let (img_width, img_height) = image.dimensions();
+    if img_width == 0 || img_height == 0 {
+        return Err(MonochoraError::InvalidDimensions { width: img_width, height: img_height });
+    }
+    
+    let (target_width, target_height) = calculate_target_dimensions(
+        img_width, 
+        img_height, 
+        config
+    )?;
+    
+    if target_width == 0 || target_height == 0 {
+        return Err(MonochoraError::InvalidDimensions { width: target_width, height: target_height });
+    }
+    
+    let columns = source_columns(target_width, img_width);
+    let pixel_rows = target_height * 2;
+    
+    (0..target_height)
+        .into_par_iter()
+        .map(|y| {
+            let mut line = String::with_capacity(target_width as usize * BLOCK_CHAR_CAPACITY);
+            let top_y = source_row(y * 2, pixel_rows, img_height);
+            let bottom_y = source_row(y * 2 + 1, pixel_rows, img_height);
+            let mut colors = BlockColors::default();
+            
+            for &img_x in &columns {
+                let top = block_pixel_color(image.get_pixel(img_x, top_y), colored, config.invert);
+                let bottom = block_pixel_color(image.get_pixel(img_x, bottom_y), colored, config.invert);
+                push_block(&mut line, &mut colors, top, bottom);
+            }
+            
+            line.push_str("\x1b[0m");
+            line.shrink_to_fit();
+            Ok(line)
+        })
+        .collect()
+}
+
 fn source_columns(target_width: u32, img_width: u32) -> Vec<u32> {
     (0..target_width)
         .map(|x| {
@@ -613,19 +663,102 @@ fn push_u8(line: &mut String, value: u8) {
     line.push((b'0' + value % 10) as char);
 }
 
+fn push_rgb_code(line: &mut String, prefix: &str, [r, g, b]: [u8; 3]) {
+    line.push_str(prefix);
+    push_u8(line, r);
+    line.push(';');
+    push_u8(line, g);
+    line.push(';');
+    push_u8(line, b);
+    line.push('m');
+}
+
 fn push_colored_char(line: &mut String, last_color: &mut Option<[u8; 3]>, color: [u8; 3], ch: char) {
     if *last_color != Some(color) {
-        let [r, g, b] = color;
-        line.push_str("\x1b[38;2;");
-        push_u8(line, r);
-        line.push(';');
-        push_u8(line, g);
-        line.push(';');
-        push_u8(line, b);
-        line.push('m');
+        push_rgb_code(line, "\x1b[38;2;", color);
         *last_color = Some(color);
     }
     line.push(ch);
+}
+
+#[derive(Default)]
+struct BlockColors {
+    foreground: Option<[u8; 3]>,
+    background: Option<[u8; 3]>,
+}
+
+fn block_pixel_color(pixel: Rgba<u8>, colored: bool, invert: bool) -> Option<[u8; 3]> {
+    let [r, g, b, a] = pixel.0;
+    if a == 0 {
+        return None;
+    }
+    
+    if colored {
+        return Some(if invert { [255 - r, 255 - g, 255 - b] } else { [r, g, b] });
+    }
+    
+    let brightness = calculate_brightness(r, g, b);
+    let brightness = if invert { 1.0 - brightness } else { brightness };
+    let gray = (brightness * 255.0).round() as u8;
+    Some([gray, gray, gray])
+}
+
+fn set_foreground(line: &mut String, colors: &mut BlockColors, color: [u8; 3]) {
+    if colors.foreground != Some(color) {
+        push_rgb_code(line, "\x1b[38;2;", color);
+        colors.foreground = Some(color);
+    }
+}
+
+fn set_background(line: &mut String, colors: &mut BlockColors, color: Option<[u8; 3]>) {
+    if colors.background != color {
+        match color {
+            Some(color) => push_rgb_code(line, "\x1b[48;2;", color),
+            None => line.push_str("\x1b[49m"),
+        }
+        colors.background = color;
+    }
+}
+
+fn push_block(line: &mut String, colors: &mut BlockColors, top: Option<[u8; 3]>, bottom: Option<[u8; 3]>) {
+    match (top, bottom) {
+        (None, None) => {
+            set_background(line, colors, None);
+            line.push(' ');
+        }
+        (Some(top), None) => {
+            set_background(line, colors, None);
+            set_foreground(line, colors, top);
+            line.push('▀');
+        }
+        (None, Some(bottom)) => {
+            set_background(line, colors, None);
+            set_foreground(line, colors, bottom);
+            line.push('▄');
+        }
+        (Some(top), Some(bottom)) if top == bottom => {
+            if colors.foreground == Some(top) && colors.background != Some(top) {
+                line.push('█');
+            } else {
+                set_background(line, colors, Some(top));
+                line.push(' ');
+            }
+        }
+        (Some(top), Some(bottom)) => {
+            let upper_cost = (colors.foreground != Some(top)) as u8 + (colors.background != Some(bottom)) as u8;
+            let lower_cost = (colors.foreground != Some(bottom)) as u8 + (colors.background != Some(top)) as u8;
+            
+            if lower_cost < upper_cost {
+                set_foreground(line, colors, bottom);
+                set_background(line, colors, Some(top));
+                line.push('▄');
+            } else {
+                set_foreground(line, colors, top);
+                set_background(line, colors, Some(bottom));
+                line.push('▀');
+            }
+        }
+    }
 }
 
 fn calculate_brightness(r: u8, g: u8, b: u8) -> f32 {

@@ -1,5 +1,5 @@
 use crate::{MonochoraError, Result};
-use crate::converter::{fit_dimensions, image_to_ascii, image_to_colored_ascii, AsciiConverterConfig};
+use crate::converter::{fit_dimensions, image_to_ascii, image_to_block_ascii, image_to_colored_ascii, AsciiConverterConfig};
 use crate::handler::GifData;
 use crossterm::terminal::size;
 use std::sync::mpsc::{self, Sender};
@@ -142,6 +142,7 @@ pub struct ResponsiveFrameManager {
     current_dimensions: TerminalDimensions,
     cached_frames: Option<Vec<Vec<String>>>,
     colored: bool,
+    blocks: bool,
 }
 
 impl ResponsiveFrameManager {
@@ -159,7 +160,14 @@ impl ResponsiveFrameManager {
             current_dimensions: initial_dimensions,
             cached_frames: None,
             colored,
+            blocks: false,
         }
+    }
+
+    pub fn with_blocks(mut self, blocks: bool) -> Self {
+        self.blocks = blocks;
+        self.cached_frames = None;
+        self
     }
 
     pub fn update_dimensions(&mut self, new_dimensions: TerminalDimensions) -> bool {
@@ -194,7 +202,9 @@ impl ResponsiveFrameManager {
         let new_frames: Result<Vec<Vec<String>>> = self.gif_data.frames
             .iter()
             .map(|frame| {
-                if self.colored {
+                if self.blocks {
+                    image_to_block_ascii(&frame.image, &config, self.colored)
+                } else if self.colored {
                     image_to_colored_ascii(&frame.image, &config)
                 } else {
                     image_to_ascii(&frame.image, &config)
