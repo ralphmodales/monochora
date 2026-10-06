@@ -308,45 +308,6 @@ fn render_ascii_to_image_colored(
     Ok(image)
 }
 
-fn create_enhanced_color_palette(bg_color: Rgb<u8>) -> Vec<u8> {
-    let mut palette = Vec::with_capacity(MAX_PALETTE_COLORS * 3);
-    
-    palette.extend_from_slice(&[bg_color[0], bg_color[1], bg_color[2]]);
-    
-    let primary_colors = [
-        [255, 255, 255], [255, 0, 0], [0, 255, 0], [0, 0, 255],
-        [255, 255, 0], [255, 0, 255], [0, 255, 255], [0, 0, 0],
-        [128, 128, 128], [192, 192, 192], [64, 64, 64], [160, 160, 160],
-        [255, 128, 0], [128, 255, 0], [0, 255, 128], [128, 0, 255],
-        [255, 0, 128], [0, 128, 255], [255, 192, 192], [192, 255, 192],
-        [192, 192, 255], [255, 255, 192], [255, 192, 255], [192, 255, 255],
-    ];
-    
-    for color in &primary_colors {
-        palette.extend_from_slice(color);
-    }
-    
-    for i in 0..24 {
-        let hue = (i as f32 / 24.0) * 360.0;
-        for (sat, val) in &[(1.0, 1.0), (0.8, 0.9), (0.6, 0.8), (0.4, 0.7), (0.2, 0.6)] {
-            let (r, g, b) = hsv_to_rgb(hue, *sat, *val);
-            palette.extend_from_slice(&[r, g, b]);
-        }
-    }
-    
-    for i in 0..64 {
-        let gray_value = (i * 255 / 63) as u8;
-        palette.extend_from_slice(&[gray_value, gray_value, gray_value]);
-    }
-    
-    while palette.len() < MAX_PALETTE_COLORS * 3 {
-        palette.extend_from_slice(&[bg_color[0], bg_color[1], bg_color[2]]);
-    }
-    
-    palette.truncate(MAX_PALETTE_COLORS * 3);
-    palette
-}
-
 fn create_optimized_palette(bg_color: Rgb<u8>, text_color: Rgb<u8>) -> Vec<u8> {
     let mut palette = Vec::with_capacity(MAX_PALETTE_COLORS * 3);
     
@@ -367,27 +328,6 @@ fn create_optimized_palette(bg_color: Rgb<u8>, text_color: Rgb<u8>) -> Vec<u8> {
     
     palette.truncate(MAX_PALETTE_COLORS * 3);
     palette
-}
-
-fn hsv_to_rgb(h: f32, s: f32, v: f32) -> (u8, u8, u8) {
-    let c = v * s;
-    let x = c * (1.0 - ((h / 60.0) % 2.0 - 1.0).abs());
-    let m = v - c;
-    
-    let (r_prime, g_prime, b_prime) = match h as i32 {
-        0..=59 => (c, x, 0.0),
-        60..=119 => (x, c, 0.0),
-        120..=179 => (0.0, c, x),
-        180..=239 => (0.0, x, c),
-        240..=299 => (x, 0.0, c),
-        _ => (c, 0.0, x),
-    };
-    
-    let r = ((r_prime + m) * 255.0) as u8;
-    let g = ((g_prime + m) * 255.0) as u8;
-    let b = ((b_prime + m) * 255.0) as u8;
-    
-    (r, g, b)
 }
 
 type ColorCache = HashMap<[u8; 3], u8>;
@@ -666,7 +606,7 @@ pub fn ascii_frames_to_gif_with_dimensions<P: AsRef<Path>>(
         .map_err(|e| MonochoraError::Io(e))?;
     
     let palette = if options.colored {
-        create_enhanced_color_palette(options.bg_color)
+        options.bg_color.0.to_vec()
     } else {
         create_optimized_palette(options.bg_color, options.text_color)
     };
@@ -692,9 +632,9 @@ pub fn ascii_frames_to_gif_with_dimensions<P: AsRef<Path>>(
     for chunk_start in (0..ascii_frames.len()).step_by(chunk_size) {
         let chunk_end = (chunk_start + chunk_size).min(ascii_frames.len());
         
-        let frame_results: Result<Vec<(Vec<u8>, u16)>> = (chunk_start..chunk_end)
+        let frame_results: Result<Vec<Frame<'static>>> = (chunk_start..chunk_end)
             .into_par_iter()
-            .map(|frame_idx| -> Result<(Vec<u8>, u16)> {
+            .map(|frame_idx| -> Result<Frame<'static>> {
                 let image = render_ascii_to_image(
                     &ascii_frames[frame_idx], 
                     width, 
@@ -704,29 +644,33 @@ pub fn ascii_frames_to_gif_with_dimensions<P: AsRef<Path>>(
                     options
                 )?;
 
-                let frame_delay = frame_delay_at(frame_delays, frame_idx);
+                let delay = (frame_delay_at(frame_delays, frame_idx) / 10).max(MIN_FRAME_DELAY);
+
+                if options.colored {
+                    let mut frame = Frame::from_rgb_speed(width as u16, height as u16, image.as_raw(), GIF_QUANTIZE_SPEED);
+                    frame.delay = delay;
+                    return Ok(frame);
+                }
 
                 let indexed_data = quantize_image(&image, &palette, &color_cache)?;
-                Ok((indexed_data, frame_delay))
+                if indexed_data.len() != (width * height) as usize {
+                    return Err(MonochoraError::GifDecode(
+                        format!("Frame {} has incorrect data size: expected {}, got {}", 
+                            frame_idx, width * height, indexed_data.len())
+                    ));
+                }
+                
+                Ok(Frame {
+                    width: width as u16,
+                    height: height as u16,
+                    buffer: Cow::Owned(indexed_data),
+                    delay,
+                    ..Frame::default()
+                })
             })
             .collect();
         
-        for (frame_idx, (indexed_data, frame_delay)) in (chunk_start..).zip(frame_results?) {
-            if indexed_data.len() != (width * height) as usize {
-                return Err(MonochoraError::GifDecode(
-                    format!("Frame {} has incorrect data size: expected {}, got {}", 
-                        frame_idx, width * height, indexed_data.len())
-                ));
-            }
-            
-            let frame = Frame {
-                width: width as u16,
-                height: height as u16,
-                buffer: Cow::Borrowed(&indexed_data),
-                delay: (frame_delay / 10).max(MIN_FRAME_DELAY),
-                ..Frame::default()
-            };
-            
+        for (frame_idx, frame) in (chunk_start..).zip(frame_results?) {
             encoder.write_frame(&frame)
                 .map_err(|e| MonochoraError::GifDecode(format!("Failed to write frame {}: {}", frame_idx, e)))?;
         }
